@@ -400,8 +400,9 @@ app.post('/supabase/profiles/upsert', async (req, res) => {
   }
 });
 
-app.get('/supabase/profiles/by-nickname', async (req, res) => {
+app.get(['/supabase/profiles/by-nickname', '/supabase/profiles/by-nickname/'], async (req, res) => {
   try {
+    console.log('Fetching profile for:', req.query);
     const nickname = String(req.query.nickname || '').trim();
     if (!nickname) return res.status(400).json({ error: 'nickname required' });
     const filter = `nickname=eq.${encodeURIComponent(nickname)}`;
@@ -417,8 +418,9 @@ app.get('/supabase/profiles/by-nickname', async (req, res) => {
   }
 });
 
-app.get('/supabase/profiles/by-device', async (req, res) => {
+app.get(['/supabase/profiles/by-device', '/supabase/profiles/by-device/'], async (req, res) => {
   try {
+    console.log('Fetching profile for:', req.query);
     const device_id = String(req.query.device_id || '').trim();
     if (!device_id) return res.status(400).json({ error: 'device_id required' });
     const filter = `device_id=eq.${encodeURIComponent(device_id)}`;

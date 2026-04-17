@@ -66,6 +66,14 @@ const corsOrigin = (origin, cb) => {
 };
 
 const app = express();
+app.use((req, _res, next) => {
+  try {
+    if (typeof req.url === 'string' && req.url.startsWith('/api/')) {
+      req.url = req.url.slice('/api'.length) || '/';
+    }
+  } catch {}
+  next();
+});
 app.use(express.json({ limit: '2mb' }));
 // Some providers post callbacks as application/x-www-form-urlencoded
 app.use(express.urlencoded({ extended: true }));
@@ -252,6 +260,10 @@ if (!SUPABASE_SERVICE_ROLE_KEY) {
   console.error('[Server] Missing SUPABASE_SERVICE_ROLE_KEY env var');
   process.exit(1);
 }
+try {
+  const hasSuno = !!String(process.env.SUNO_API_KEY || process.env.EXPO_PUBLIC_SUNO_API_KEY || '').trim();
+  console.log('[Server] SUNO_API_KEY', hasSuno ? 'Key exists' : 'Key MISSING');
+} catch {}
 const VIBES_BUCKET = 'vibes-storage';
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
@@ -610,6 +622,45 @@ app.get('/supabase/tracks/by-audio-url', async (req, res) => {
   }
 });
 
+app.all('/supabase/*', async (req, res) => {
+  try {
+    const suffix = String(req.params?.[0] || '').replace(/^\/+/, '');
+    if (!suffix) return res.status(404).json({ error: 'Missing Supabase path' });
+    if (suffix.startsWith('auth/') || suffix.startsWith('functions/') || suffix.startsWith('realtime/')) {
+      return res.status(403).json({ error: 'Forbidden path' });
+    }
+    const method = String(req.method || 'GET').toUpperCase();
+    const qs = (() => {
+      try {
+        const i = String(req.originalUrl || '').indexOf('?');
+        return i >= 0 ? String(req.originalUrl || '').slice(i) : '';
+      } catch {
+        return '';
+      }
+    })();
+    const target = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/${suffix}${qs}`;
+    const headers = { ...supabaseHeaders() };
+    delete headers['Content-Type'];
+    if (method !== 'GET' && method !== 'HEAD') {
+      headers['Content-Type'] = req.headers['content-type'] || 'application/json';
+    }
+    const resp = await axios.request({
+      method,
+      url: target,
+      headers,
+      data: method === 'GET' || method === 'HEAD' ? undefined : req.body,
+      timeout: 12000,
+      validateStatus: () => true,
+    });
+    return res.status(resp.status || 500).send(resp.data);
+  } catch (e) {
+    const status = e?.response?.status || 500;
+    const data = e?.response?.data || { error: 'Supabase proxy error' };
+    console.error('[Server] Supabase catch-all proxy error', { status, data });
+    return res.status(status).json(data);
+  }
+});
+
 // Proxy for Suno API (used by web builds to avoid CORS issues)
 // Forwards Authorization header and JSON body to the remote Suno generate endpoint.
 const API_BASE = process.env.EXPO_PUBLIC_SUNO_BASE || 'https://api.mureka.org/v1';
@@ -749,6 +800,16 @@ app.post('/proxy/suno/generate', async (req, res) => {
     const DRY_RUN = String(process.env.SUNO_DRY_RUN || '').trim() === '1';
     const FALLBACK_ON_ERROR = String(process.env.SUNO_FALLBACK_ON_ERROR || '').trim() === '1';
     const missingKey = API_KEY.includes('your-suno-api-key') || !API_KEY;
+    try {
+      console.log('[Server] Suno env snapshot', {
+        hasSunoKey: !missingKey,
+        apiBase: API_BASE,
+        isDev: IS_DEV,
+        dryRun: DRY_RUN,
+        fallbackOnError: FALLBACK_ON_ERROR,
+        envCallback: String(process.env.EXPO_PUBLIC_SUNO_CALLBACK_URL || '').trim(),
+      });
+    } catch {}
     const sanitizeCb = (url) => String(url || '').trim().replace(/\/+$/, '');
     const bodyCb = sanitizeCb(req.body?.callback_url || req.body?.callbackUrl || req.body?.callBackUrl || '');
     const envCb = sanitizeCb(process.env.EXPO_PUBLIC_SUNO_CALLBACK_URL || '');
@@ -783,7 +844,12 @@ app.post('/proxy/suno/generate', async (req, res) => {
 
     if (missingKey) {
       console.warn('[Server] Suno API Key missing/placeholder', { DRY_RUN, FALLBACK_ON_ERROR });
-      return res.status(500).json({ error: 'Server misconfigured: SUNO_API_KEY missing', callbackSource });
+      return res.status(500).json({
+        error: 'Server misconfigured: SUNO_API_KEY missing',
+        callbackSource,
+        apiBase: API_BASE,
+        hasKey: false,
+      });
     }
 
     const prompt = String(req.body?.prompt || '').trim();

@@ -30,6 +30,23 @@ function logRequest(phase: 'request' | 'response' | 'error', info: Record<string
   } catch {}
 }
 
+async function parseJsonResponse(resp: Response, label: string): Promise<any> {
+  const contentType = String(resp.headers.get('content-type') || '').toLowerCase();
+  const text = await resp.text().catch(() => '');
+  if (contentType.includes('text/html')) {
+    try { console.warn('[Supabase API] HTML response', { label, status: resp.status, text }); } catch {}
+    throw new Error('Server returned HTML instead of JSON');
+  }
+  const trimmed = String(text || '').trim();
+  if (!trimmed) return null;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    try { console.warn('[Supabase API] Invalid JSON response', { label, status: resp.status, text }); } catch {}
+    throw new Error('Invalid server response');
+  }
+}
+
 export const supabaseApi = {
   getLastLogs: () => [...LAST_LOGS],
   clearLogs: () => { LAST_LOGS.splice(0, LAST_LOGS.length); },
@@ -79,7 +96,7 @@ export const supabaseApi = {
           headers: withTunnelBypassHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify(body),
         });
-        const data = await resp.json();
+        const data = await parseJsonResponse(resp, 'profiles/upsert');
         if (resp.ok) {
           logRequest('response', { method: 'UPSERT_PROXY', status: resp.status, ok: true });
           return { ok: true, status: resp.status, data };
@@ -109,7 +126,7 @@ export const supabaseApi = {
       if (base) {
         console.log('[Supabase API] Trying proxy fetchByDeviceId:', device_id);
         const resp = await fetch(`${base}/supabase/profiles/by-device?device_id=${encodeURIComponent(device_id)}`, { headers: TUNNEL_BYPASS_HEADER });
-        const data = await resp.json();
+        const data = await parseJsonResponse(resp, 'profiles/by-device');
         if (resp.ok) {
           logRequest('response', { method: 'SELECT_DEVICE_PROXY', status: resp.status, ok: true });
           return { ok: true, data };
@@ -146,7 +163,7 @@ export const supabaseApi = {
       if (base) {
         console.log('[Supabase API] Trying proxy fetchByNickname:', nickname);
         const resp = await fetch(`${base}/supabase/profiles/by-nickname?nickname=${encodeURIComponent(nickname)}`, { headers: TUNNEL_BYPASS_HEADER });
-        const data = await resp.json();
+        const data = await parseJsonResponse(resp, 'profiles/by-nickname');
         if (resp.ok) {
           logRequest('response', { method: 'SELECT_PROXY', status: resp.status, ok: true });
           return { ok: true, data };
@@ -277,7 +294,7 @@ export const supabaseApi = {
             headers: withTunnelBypassHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify([row]),
           });
-          const data = await resp.json();
+          const data = await parseJsonResponse(resp, 'tracks/bulk-insert(single)');
           if (resp.ok) {
             logRequest('response', { method: 'INSERT_PROXY', status: resp.status, ok: true });
             return { ok: true, status: resp.status, data };
@@ -311,7 +328,7 @@ export const supabaseApi = {
             headers: withTunnelBypassHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify([row]),
           });
-          const j = await resp.json();
+          const j = await parseJsonResponse(resp, 'tracks/bulk-insert(single-fallback)');
           const ok = resp.status >= 200 && resp.status < 300;
           if (ok) {
             logRequest('response', { method: 'INSERT_PROXY', status: resp.status, ok: true });
@@ -342,7 +359,7 @@ export const supabaseApi = {
             headers: withTunnelBypassHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(rows),
           });
-          const data = await resp.json();
+          const data = await parseJsonResponse(resp, 'tracks/bulk-insert');
           if (resp.ok) {
             logRequest('response', { method: 'INSERT_PROXY', status: resp.status, ok: true });
             return { ok: true, status: resp.status, data };
@@ -377,7 +394,7 @@ export const supabaseApi = {
             headers: withTunnelBypassHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(rows),
           });
-          const j = await resp.json();
+          const j = await parseJsonResponse(resp, 'tracks/bulk-insert(fallback)');
           const ok = resp.status >= 200 && resp.status < 300;
           if (ok) {
             logRequest('response', { method: 'INSERT_PROXY', status: resp.status, ok: true });
@@ -406,7 +423,7 @@ export const supabaseApi = {
         const base = getApiBase();
         if (base) {
           const resp = await fetch(`${base}/supabase/tracks/by-profile?profile_id=${encodeURIComponent(profile_id)}`, { headers: TUNNEL_BYPASS_HEADER });
-          const data = await resp.json();
+          const data = await parseJsonResponse(resp, 'tracks/by-profile');
           if (resp.ok) {
             const normalized = Array.isArray(data) ? data.map((r: any) => ({
               ...r,
@@ -447,7 +464,7 @@ export const supabaseApi = {
         headers: withTunnelBypassHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ profile_id }),
       });
-      const data = await resp.json().catch(() => ({}));
+      const data = await parseJsonResponse(resp, 'tracks/backfill-mp3').catch(() => ({}));
       if (!resp.ok) return { ok: false, status: resp.status, data };
       return { ok: true, status: resp.status, data };
     } catch (e: any) {
@@ -477,7 +494,7 @@ export const supabaseApi = {
             headers: withTunnelBypassHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ track_id, liked }),
           });
-          const data = await resp.json();
+          const data = await parseJsonResponse(resp, 'tracks/update-liked');
           if (resp.ok) return { ok: true, data };
         }
       } catch {}

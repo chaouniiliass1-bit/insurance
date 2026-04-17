@@ -135,9 +135,13 @@ export async function generateSunoTrack(
     if (!response) throw { code: 0, message: 'Unable to reach backend. Check EXPO_PUBLIC_API_URL / server.', detail: String(lastErr?.message || lastErr) } as any;
 
     console.log('[Suno] Proxy response status:', response.status);
+    const contentType = String(response.headers.get('content-type') || '').toLowerCase();
     const text = await response.text();
     console.log('[Suno] Proxy raw response:', text);
 
+    if (contentType.includes('text/html')) {
+      throw { error: true, code: response.status, message: 'Server returned HTML instead of JSON', detail: text } as any;
+    }
     if (!response.ok) {
       try {
         console.warn('[Suno] Proxy non-OK response', { status: response.status, text });

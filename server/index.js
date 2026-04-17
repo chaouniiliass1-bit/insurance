@@ -1,6 +1,13 @@
 const dotenv = require('dotenv');
 dotenv.config({ path: '.env' });
 dotenv.config({ path: '.env.local', override: true });
+try {
+  console.log('DB Config Check:', {
+    hasUrl: !!(process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL),
+    hasServiceKey: !!(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY),
+    hasAnonKey: !!(process.env.SUPABASE_ANON_KEY || process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY),
+  });
+} catch {}
 const express = require('express');
 const http = require('http');
 const cors = require('cors');
@@ -274,12 +281,23 @@ console.log('[Server] ALL MODES: /set-latest-track disabled');
 
 // --- Supabase Secure Proxy (Service Role) ---
 // Use service role key ONLY on the server. Never expose to client.
-const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || 'https://wiekabbfmpmxjhiwyfzt.supabase.co';
-const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://wiekabbfmpmxjhiwyfzt.supabase.co';
+const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || '').trim();
 if (!SUPABASE_SERVICE_ROLE_KEY) {
   console.error('[Server] Missing SUPABASE_SERVICE_ROLE_KEY env var');
   process.exit(1);
 }
+try {
+  const host = (() => {
+    try { return new URL(SUPABASE_URL).host; } catch { return null; }
+  })();
+  console.log('[Server] Supabase config snapshot', {
+    host,
+    hasServiceKey: true,
+    serviceKeyLen: SUPABASE_SERVICE_ROLE_KEY.length,
+    serviceKeyLooksJwt: SUPABASE_SERVICE_ROLE_KEY.startsWith('eyJ'),
+  });
+} catch {}
 try {
   const hasSuno = !!String(process.env.SUNO_API_KEY || process.env.EXPO_PUBLIC_SUNO_API_KEY || '').trim();
   console.log('[Server] SUNO_API_KEY', hasSuno ? 'Key exists' : 'Key MISSING');
@@ -306,13 +324,18 @@ function logCriticalIfSupabaseHtml(payload, context) {
 }
 
 function supabaseHeaders() {
-  return {
+  const headers = {
     apikey: SUPABASE_SERVICE_ROLE_KEY,
     Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
     'Content-Type': 'application/json',
     Prefer: 'resolution=merge-duplicates,return=representation',
   };
+  return headers;
 }
+try {
+  const h = supabaseHeaders();
+  console.log('[Server] Supabase header check', { hasApikey: !!h.apikey, hasAuthorization: String(h.Authorization || '').startsWith('Bearer ') });
+} catch {}
 
 const siphonInFlight = new Set();
 let bucketEnsured = false;

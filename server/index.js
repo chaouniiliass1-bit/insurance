@@ -86,6 +86,8 @@ const io = new Server(server, {
   cors: { origin: corsOrigin, methods: ['GET', 'POST', 'OPTIONS'], credentials: false },
   path: '/socket',
   transports: ['websocket', 'polling'],
+  pingTimeout: 60000,
+  pingInterval: 25000,
   allowEIO3: true,
 });
 
@@ -119,6 +121,24 @@ const pollingByTaskId = new Map();
 // No device mapping; broadcast-only callbacks
 
 io.on('connection', (socket) => {
+  try {
+    const authPid = socket?.handshake?.auth?.profile_id ?? socket?.handshake?.auth?.profileId;
+    const queryPid = socket?.handshake?.query?.profile_id ?? socket?.handshake?.query?.profileId;
+    const pid = String(authPid || queryPid || '').trim();
+    if (pid) {
+      socket.join(pid);
+      console.log('[Server] Socket joined room', { socketId: socket.id, profile_id: pid });
+    }
+  } catch {}
+  socket.on('join', (payload) => {
+    try {
+      const pid = String(payload?.profile_id || payload?.profileId || '').trim();
+      if (pid) {
+        socket.join(pid);
+        console.log('[Server] Socket joined room (event)', { socketId: socket.id, profile_id: pid });
+      }
+    } catch {}
+  });
   try {
     const addr = socket?.handshake?.address || 'unknown';
     const t = socket?.conn?.transport?.name || 'unknown';
@@ -1267,7 +1287,8 @@ async function handleSunoCallback(req, res) {
 
     // Error handling
     if (code && [400, 401, 429, 500].includes(Number(code))) {
-      io.emit('suno:error', { code, msg, task_id });
+      if (profile_id) io.to(profile_id).emit('suno:error', { code, msg, task_id });
+      else io.emit('suno:error', { code, msg, task_id });
       return res.status(200).json({ status: 'ok' });
     }
 
@@ -1329,7 +1350,9 @@ async function handleSunoCallback(req, res) {
           console.warn('[Server] tracks upsert from callback failed', e?.message || e);
         }
       }
-      io.emit('suno:track', { url: audio_url, audio_url, urls, cover, title: baseTitle, titles, task_id, callbackType, items });
+      const payload = { url: audio_url, audio_url, urls, cover, title: baseTitle, titles, task_id, callbackType, items };
+      if (profile_id) io.to(profile_id).emit('suno:track', payload);
+      else io.emit('suno:track', payload);
       for (let i = 0; i < Math.min(2, siphonJobs.length); i++) {
         const job = siphonJobs[i];
         const suffix = i === 1 ? '_2' : '';
@@ -1350,7 +1373,8 @@ async function handleSunoCallback(req, res) {
       return res.status(200).json({ status: 'ok' });
     }
 
-    io.emit('suno:error', { code: code || 400, msg: msg || 'Invalid callback payload or audio URL', task_id });
+    if (profile_id) io.to(profile_id).emit('suno:error', { code: code || 400, msg: msg || 'Invalid callback payload or audio URL', task_id });
+    else io.emit('suno:error', { code: code || 400, msg: msg || 'Invalid callback payload or audio URL', task_id });
     return res.status(200).json({ status: 'ok' });
   } catch (e) {
     console.error('[Server] Callback error', e);

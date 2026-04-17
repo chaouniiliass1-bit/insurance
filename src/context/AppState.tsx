@@ -451,6 +451,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       });
       client.on('connect', () => {
         console.log('[Client] Socket connected');
+        try {
+          const pid = profileIdRef.current;
+          if (pid) {
+            client.emit('join', { profile_id: pid });
+          }
+        } catch {}
       });
       client.on('connect_error', (err) => {
         try {
@@ -745,6 +751,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         
         if (socketRef.current && !socketRef.current.connected) {
           console.log('[Client] Screen is ' + name + ' — connecting socket');
+          try {
+            const pid = profileIdRef.current;
+            if (pid) {
+              (socketRef.current as any).auth = { profile_id: String(pid) };
+            }
+          } catch {}
           socketRef.current.connect();
         }
       }
@@ -811,6 +823,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     try {
       if (socketRef.current && !socketRef.current.connected) {
         console.log('[AppState] generateTrack connecting socket for callbacks');
+        try {
+          const pid = profileIdRef.current ?? profileId;
+          if (pid) {
+            (socketRef.current as any).auth = { profile_id: String(pid) };
+          }
+        } catch {}
         socketRef.current.connect();
       }
     } catch {}
@@ -1373,6 +1391,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       connectSocket: () => {
         if (socketRef.current && !socketRef.current.connected) {
           console.log('[Client] Manually connecting socket...');
+          try {
+            const pid = profileIdRef.current ?? profileId;
+            if (pid) {
+              (socketRef.current as any).auth = { profile_id: String(pid) };
+            }
+          } catch {}
           socketRef.current.connect();
         }
       },

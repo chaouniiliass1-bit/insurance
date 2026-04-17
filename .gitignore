@@ -31,7 +31,15 @@ yarn-error.*
 *.pem
 
 # local env files
+.env
 .env*.local
+
+# local tooling / logs (do not commit)
+.home/
+server/*.log
+server/.ngrok*.yml
+*.zip
+bin/ngrok
 
 # typescript
 *.tsbuildinfo

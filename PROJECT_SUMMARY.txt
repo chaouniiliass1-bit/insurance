@@ -1,0 +1,54 @@
+PROJECT SUMMARY: MOODFUSION PLAYER (AI MUSIC APP)
+===================================================
+
+CORE VISION:
+An Expo (React Native) app that generates personalized AI music tracks via Suno AI based on user moods/genres. Features a real-time event-driven pipeline, seamless audio streaming with dual-track switching, and a credit-based economy.
+
+1. TECHNICAL ARCHITECTURE & PIPELINE
+------------------------------------
+- TRIGGER: App -> Backend Proxy (via Serveo/ngrok tunnel).
+- PROXY: Node.js/Express server forwards to Suno AI API (api.sunoapi.org/api/v1/generate).
+- WEBHOOK: Suno POSTs to /suno-callback on the backend when track is ready.
+- SOCKET: Backend emits 'suno:track' via Socket.io to the app.
+- PLAYBACK: App (expo-av) streams tracks immediately upon socket receipt.
+
+2. MAJOR FEATURES & IMPLEMENTATION
+----------------------------------
+- SUNO INTEGRATION:
+  * Real API calls enabled (SUNO_DRY_RUN=0).
+  * AUTO-FALLBACK: If Suno returns 502/error, server synthesizes a callback with a demo track so the UI never hangs.
+- DUAL-TRACK PLAYER:
+  * Generates 2 tracks per request.
+  * App pre-loads both; user can toggle 'Track A' / 'Track B' instantly on the Player screen.
+- STATE & PERSISTENCE:
+  * AppState.tsx: Central brain for socket logic, credit deduction, and navigation.
+  * Supabase: Handles Auth, Credits (coins), and bulk-inserting track metadata into 'tracks' table.
+
+3. CURRENT ENVIRONMENT (STABLE)
+-------------------------------
+- TUNNEL: Currently using Serveo (ssh -R 80:localhost:8788 serveo.net).
+- BACKEND: Node.js on port 8788.
+- FRONTEND: Expo SDK 54 on port 8081.
+- AUTH/API: Suno API Key and Supabase project fully integrated.
+
+4. CRITICAL CONFIGURATIONS (.env)
+---------------------------------
+EXPO_PUBLIC_API_URL=https://e0f962e202d55d86-41-142-52-10.serveousercontent.com
+EXPO_PUBLIC_SUNO_CALLBACK_URL=https://e0f962e202d55d86-41-142-52-10.serveousercontent.com/suno-callback
+SUNO_DRY_RUN=0
+SUNO_FALLBACK_ON_ERROR=1
+EXPO_PUBLIC_SOCKET_TRANSPORT=websocket
+DISABLE_SOCKET_URL_UPSERT=false
+
+5. RECENT FIXES (CRITICAL FOR CONTINUATION)
+-------------------------------------------
+- SSL BYPASS: Backend uses httpsAgent { rejectUnauthorized: false } to handle Suno proxy errors.
+- SOCKET LOCK: Forced 'websocket' transport to fix connectivity issues over tunnels.
+- NAV GUARD: Socket connects/disconnects based on active screen (MoodSelection/Player) for optimization.
+
+6. HOW TO RUN
+-------------
+1. Start Tunnel: ssh -R 80:localhost:8788 serveo.net (Copy URL to .env).
+2. Start Backend: npm run server
+3. Start App: npm start -- --clear
+4. Test: node scripts/test-flow.js (Verifies Tunnel -> Server -> Socket path).

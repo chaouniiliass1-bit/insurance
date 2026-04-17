@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MoodFusion Expo Link</title>
+    <style>
+      html, body { margin: 0; padding: 0; font-family: -apple-system, system-ui, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background: #0b0b0c; color: #fff; }
+      .wrap { max-width: 760px; margin: 0 auto; padding: 20px; }
+      .card { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 16px; padding: 18px; }
+      .title { font-size: 18px; font-weight: 700; margin: 0 0 8px; }
+      .sub { opacity: 0.8; margin: 0 0 16px; }
+      .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+      a.btn { display: inline-block; padding: 12px 14px; border-radius: 12px; text-decoration: none; background: rgba(255,255,255,0.14); color: #fff; border: 1px solid rgba(255,255,255,0.18); font-weight: 700; }
+      code { display: block; background: rgba(0,0,0,0.35); padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(255,255,255,0.12); margin-top: 10px; word-break: break-all; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <p class="title">Open MoodFusion in Expo Go</p>
+        <p class="sub">If QR scanning fails (hotspot), use this deep link.</p>
+        <div class="row">
+          <a class="btn" id="openLink" href="#">Open in Expo Go</a>
+        </div>
+        <code id="expText"></code>
+      </div>
+    </div>
+    <script>
+      (function () {
+        var host = window.location.hostname || 'localhost';
+        var exp = 'exp://' + host + ':8081';
+        var a = document.getElementById('openLink');
+        var t = document.getElementById('expText');
+        if (a) a.href = exp;
+        if (t) t.textContent = exp;
+      })();
+    </script>
+  </body>
+</html>

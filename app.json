@@ -1,19 +1,29 @@
 {
   "expo": {
-    "name": "MoodFusionPlayer",
-    "slug": "MoodFusionPlayer",
+    "name": "MoodFusion Player",
+    "slug": "moodfusion-player",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
+    "plugins": [
+      "expo-dev-client"
+    ],
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "resizeMode": "contain"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.anonymous.MoodFusionPlayer",
+      "infoPlist": {
+        "NSPhotoLibraryAddUsageDescription": "Allow MoodFusion Player to save your downloaded vibes to your Photos.",
+        "NSPhotoLibraryUsageDescription": "Allow MoodFusion Player to access your Photos.",
+        "UIBackgroundModes": [
+          "audio"
+        ]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -21,10 +31,26 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.moodfusion.player",
+      "permissions": [
+        "INTERNET",
+        "RECORD_AUDIO",
+        "POST_NOTIFICATIONS",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "READ_MEDIA_AUDIO",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "c6879d62-ef68-4e70-8cc4-c1c4f14115b6"
+      }
     }
   }
 }

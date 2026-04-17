@@ -2,7 +2,7 @@ import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { TUNNEL_BYPASS_HEADER, withTunnelBypassHeaders } from './base';
 
-type Params = { mood: string; genre1: string; genre2: string; vocalMode?: 'lyrics' | 'instrumental' };
+type Params = { mood: string; genre1: string; genre2: string; vocalMode?: 'lyrics' | 'instrumental'; profileId?: string | null };
 
 export type SunoAck = {
   taskId: string;
@@ -80,7 +80,7 @@ function resolveApiBaseCandidates(): string[] {
 }
 
 export async function generateSunoTrack(
-  { mood, genre1, genre2, vocalMode }: Params,
+  { mood, genre1, genre2, vocalMode, profileId }: Params,
   onProgress?: (progress: number) => void
 ): Promise<SunoAck> {
   const cbUrl = resolveCallbackUrl();
@@ -100,6 +100,7 @@ export async function generateSunoTrack(
     callback_url: cbUrl,
     callbackUrl: cbUrl,
     callBackUrl: cbUrl,
+    profile_id: typeof profileId === 'string' && profileId.trim().length ? profileId.trim() : undefined,
   };
 
   try {

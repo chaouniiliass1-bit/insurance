@@ -866,6 +866,16 @@ app.post('/proxy/suno/generate', async (req, res) => {
       });
     }
 
+    const requestedProfileId = String(req.body?.profile_id || req.body?.profileId || '').trim();
+    if (requestedProfileId && CALLBACK_URL) {
+      try {
+        const u = new URL(CALLBACK_URL);
+        u.searchParams.set('profile_id', requestedProfileId);
+        CALLBACK_URL = u.toString().replace(/\/+$/, '');
+        callbackSource += '_profile';
+      } catch {}
+    }
+
     const prompt = String(req.body?.prompt || '').trim();
     if (prompt.length > 500) {
       return res.status(400).json({ error: 'Prompt too long (max 500 characters).' });
@@ -1095,13 +1105,14 @@ app.post('/proxy/suno/generate', async (req, res) => {
 });
 
 // Suno official callback entry point
-app.post('/suno-callback', (req, res) => {
+async function handleSunoCallback(req, res) {
   try {
     const xf = req.headers['x-forwarded-for'];
     const ua = req.headers['user-agent'];
     const ct = req.headers['content-type'];
     const ip = req.ip || req.connection?.remoteAddress || 'unknown';
     console.log('[Server] RECEIVED CALLBACK FROM SUNO', { ip, xf, ct, ua });
+    const profile_id = String(req.query?.profile_id || '').trim();
     const body = req.body || {};
     const code = body.code;
     const msg = body.msg;
@@ -1293,6 +1304,31 @@ app.post('/suno-callback', (req, res) => {
       console.log('[Server] Emitting suno:track (broadcast)', { task_id, callbackType, url: finalUrl });
       const baseTitle = typeof title === 'string' && title.trim().length ? title.trim() : 'New Track';
       const titles = urls.length >= 2 ? [baseTitle, `${baseTitle} 2`] : [baseTitle];
+      if (profile_id) {
+        try {
+          for (let i = 0; i < Math.min(2, urls.length); i++) {
+            const u = urls[i];
+            if (typeof u !== 'string' || !u.startsWith('http')) continue;
+            const row = {
+              profile_id,
+              audio_url: u,
+              mp3_url: u,
+              stream_url: u,
+              title: titles[i] || baseTitle,
+              image_url: typeof cover === 'string' ? cover : null,
+            };
+            const existing = await supabaseAdmin.from('tracks').select('id').eq('profile_id', profile_id).eq('audio_url', u).limit(1);
+            const id = Array.isArray(existing?.data) && existing.data[0]?.id ? existing.data[0].id : null;
+            if (id) {
+              await supabaseAdmin.from('tracks').update(row).eq('id', id);
+            } else {
+              await supabaseAdmin.from('tracks').insert(row);
+            }
+          }
+        } catch (e) {
+          console.warn('[Server] tracks upsert from callback failed', e?.message || e);
+        }
+      }
       io.emit('suno:track', { url: audio_url, audio_url, urls, cover, title: baseTitle, titles, task_id, callbackType, items });
       for (let i = 0; i < Math.min(2, siphonJobs.length); i++) {
         const job = siphonJobs[i];
@@ -1320,7 +1356,10 @@ app.post('/suno-callback', (req, res) => {
     console.error('[Server] Callback error', e);
     return res.status(200).json({ status: 'ok' });
   }
-});
+}
+
+app.post('/suno-callback', handleSunoCallback);
+app.post('/proxy/suno/callback', handleSunoCallback);
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[Server] Listening on http://0.0.0.0:${PORT}`);

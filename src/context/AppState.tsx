@@ -838,7 +838,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     const g2Val = _genre2 ?? genre2 ?? 'Jazz';
     try {
       console.log('[AppState] Calling generateSunoTrack...');
-      const ack = await generateSunoTrack({ mood: moodVal, genre1: g1Val, genre2: g2Val, vocalMode }, setGenerationProgress);
+      const ack = await generateSunoTrack({ mood: moodVal, genre1: g1Val, genre2: g2Val, vocalMode, profileId: profileIdRef.current ?? profileId }, setGenerationProgress);
       console.log('[AppState] generateSunoTrack response:', ack);
       if (ack?.taskId) {
         currentTaskIdRef.current = ack.taskId;

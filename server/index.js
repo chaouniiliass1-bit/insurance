@@ -414,6 +414,14 @@ app.get('/supabase/profiles/by-device', async (req, res) => {
   }
 });
 
+app.get('/supabase/profiles', async (req, res) => {
+  const nickname = String(req.query.nickname || '').trim();
+  const device_id = String(req.query.device_id || '').trim();
+  if (nickname) return res.redirect(307, `/supabase/profiles/by-nickname?nickname=${encodeURIComponent(nickname)}`);
+  if (device_id) return res.redirect(307, `/supabase/profiles/by-device?device_id=${encodeURIComponent(device_id)}`);
+  return res.status(400).json({ error: 'Provide nickname or device_id' });
+});
+
 app.patch('/supabase/profiles/coins', async (req, res) => {
   try {
     const { nickname, coins } = req.body || {};
@@ -548,6 +556,12 @@ app.get('/supabase/tracks/by-profile', async (req, res) => {
     console.error('[Server] Supabase tracks list error', { status, data });
     return res.status(status).json(data);
   }
+});
+
+app.get('/supabase/tracks', async (req, res) => {
+  const profile_id = String(req.query.profile_id || '').trim();
+  if (profile_id) return res.redirect(307, `/supabase/tracks/by-profile?profile_id=${encodeURIComponent(profile_id)}`);
+  return res.status(400).json({ error: 'Provide profile_id' });
 });
 
 app.post('/supabase/tracks/backfill-mp3', async (req, res) => {

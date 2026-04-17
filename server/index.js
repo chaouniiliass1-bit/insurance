@@ -289,6 +289,22 @@ const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
 });
 
+function isHtmlDoctype(payload) {
+  if (typeof payload !== 'string') return false;
+  const t = payload.trimStart().toLowerCase();
+  return t.startsWith('<!doctype html') || t.startsWith('<html');
+}
+
+function logCriticalIfSupabaseHtml(payload, context) {
+  if (!isHtmlDoctype(payload)) return false;
+  try {
+    console.error('CRITICAL: SUPABASE_URL is pointing to a website, not an API!', { SUPABASE_URL, context });
+  } catch {
+    console.error('CRITICAL: SUPABASE_URL is pointing to a website, not an API!');
+  }
+  return true;
+}
+
 function supabaseHeaders() {
   return {
     apikey: SUPABASE_SERVICE_ROLE_KEY,
@@ -391,10 +407,14 @@ app.post('/supabase/profiles/upsert', async (req, res) => {
     const body = req.body || {};
     const url = `${SUPABASE_URL}/rest/v1/profiles?on_conflict=nickname`;
     const resp = await axios.post(url, body, { headers: supabaseHeaders(), timeout: 10000 });
+    if (logCriticalIfSupabaseHtml(resp.data, 'POST /supabase/profiles/upsert')) {
+      return res.status(500).json({ error: 'Supabase base URL misconfigured' });
+    }
     return res.status(resp.status).json(resp.data);
   } catch (e) {
     const status = e?.response?.status || 500;
     const data = e?.response?.data || { error: 'Supabase upsert error' };
+    logCriticalIfSupabaseHtml(data, 'POST /supabase/profiles/upsert (error)');
     console.error('[Server] Supabase upsert error', { status, data });
     return res.status(status).json(data);
   }
@@ -409,10 +429,14 @@ app.get(['/supabase/profiles/by-nickname', '/supabase/profiles/by-nickname/'], a
     const select = encodeURIComponent('id,coins,nickname,avatar_url,password_hash,keep_logged_in,device_id');
     const url = `${SUPABASE_URL}/rest/v1/profiles?${filter}&select=${select}`;
     const resp = await axios.get(url, { headers: supabaseHeaders(), timeout: 8000 });
+    if (logCriticalIfSupabaseHtml(resp.data, 'GET /supabase/profiles/by-nickname')) {
+      return res.status(500).json({ error: 'Supabase base URL misconfigured' });
+    }
     return res.status(resp.status).json(resp.data);
   } catch (e) {
     const status = e?.response?.status || 500;
     const data = e?.response?.data || { error: 'Supabase fetch error' };
+    logCriticalIfSupabaseHtml(data, 'GET /supabase/profiles/by-nickname (error)');
     console.error('[Server] Supabase fetch error', { status, data });
     return res.status(status).json(data);
   }
@@ -427,10 +451,14 @@ app.get(['/supabase/profiles/by-device', '/supabase/profiles/by-device/'], async
     const select = encodeURIComponent('id,coins,nickname,avatar_url,password_hash,keep_logged_in,device_id');
     const url = `${SUPABASE_URL}/rest/v1/profiles?${filter}&select=${select}&limit=1`;
     const resp = await axios.get(url, { headers: supabaseHeaders(), timeout: 8000 });
+    if (logCriticalIfSupabaseHtml(resp.data, 'GET /supabase/profiles/by-device')) {
+      return res.status(500).json({ error: 'Supabase base URL misconfigured' });
+    }
     return res.status(resp.status).json(resp.data);
   } catch (e) {
     const status = e?.response?.status || 500;
     const data = e?.response?.data || { error: 'Supabase fetch error' };
+    logCriticalIfSupabaseHtml(data, 'GET /supabase/profiles/by-device (error)');
     console.error('[Server] Supabase device fetch error', { status, data });
     return res.status(status).json(data);
   }
@@ -541,6 +569,9 @@ app.post('/supabase/tracks/bulk-insert', async (req, res) => {
     if (!payload.length) return res.status(200).json([]);
     const url = `${SUPABASE_URL}/rest/v1/tracks`;
     const resp = await axios.post(url, payload, { headers: supabaseHeaders(), timeout: 12000 });
+    if (logCriticalIfSupabaseHtml(resp.data, 'POST /supabase/tracks/bulk-insert')) {
+      return res.status(500).json({ error: 'Supabase base URL misconfigured' });
+    }
     try {
       const stamp = new Date().toISOString();
       const summary = {
@@ -559,6 +590,7 @@ app.post('/supabase/tracks/bulk-insert', async (req, res) => {
   } catch (e) {
     const status = e?.response?.status || 500;
     const data = e?.response?.data || { error: 'Supabase tracks bulk insert error' };
+    logCriticalIfSupabaseHtml(data, 'POST /supabase/tracks/bulk-insert (error)');
     console.error('[Server] Supabase tracks bulk insert error', { status, data });
     return res.status(status).json(data);
   }
@@ -571,10 +603,14 @@ app.get('/supabase/tracks/by-profile', async (req, res) => {
     const select = encodeURIComponent('id,audio_url,title,mood,genres,liked,created_at,image_url,stream_url,mp3_url');
     const url = `${SUPABASE_URL}/rest/v1/tracks?profile_id=eq.${encodeURIComponent(profile_id)}&select=${select}&order=created_at.desc`;
     const resp = await axios.get(url, { headers: supabaseHeaders(), timeout: 12000 });
+    if (logCriticalIfSupabaseHtml(resp.data, 'GET /supabase/tracks/by-profile')) {
+      return res.status(500).json({ error: 'Supabase base URL misconfigured' });
+    }
     return res.status(resp.status || 200).json(resp.data);
   } catch (e) {
     const status = e?.response?.status || 500;
     const data = e?.response?.data || { error: 'Supabase tracks list error' };
+    logCriticalIfSupabaseHtml(data, 'GET /supabase/tracks/by-profile (error)');
     console.error('[Server] Supabase tracks list error', { status, data });
     return res.status(status).json(data);
   }
@@ -649,10 +685,14 @@ app.get('/supabase/tracks/by-audio-url', async (req, res) => {
     if (!audio_url) return res.status(400).json({ error: 'Missing audio_url' });
     const url = `${SUPABASE_URL}/rest/v1/tracks?audio_url=eq.${encodeURIComponent(audio_url)}&select=*`;
     const resp = await axios.get(url, { headers: supabaseHeaders(), timeout: 8000 });
+    if (logCriticalIfSupabaseHtml(resp.data, 'GET /supabase/tracks/by-audio-url')) {
+      return res.status(500).json({ error: 'Supabase base URL misconfigured' });
+    }
     return res.status(resp.status || 200).json(resp.data);
   } catch (e) {
     const status = e?.response?.status || 500;
     const data = e?.response?.data || { error: 'Supabase tracks lookup error' };
+    logCriticalIfSupabaseHtml(data, 'GET /supabase/tracks/by-audio-url (error)');
     console.error('[Server] Supabase tracks lookup error', { status, data });
     return res.status(status).json(data);
   }
@@ -688,10 +728,14 @@ app.all('/supabase/*', async (req, res) => {
       timeout: 12000,
       validateStatus: () => true,
     });
+    if (logCriticalIfSupabaseHtml(resp.data, `ALL /supabase/* → ${suffix}`)) {
+      return res.status(500).json({ error: 'Supabase base URL misconfigured' });
+    }
     return res.status(resp.status || 500).send(resp.data);
   } catch (e) {
     const status = e?.response?.status || 500;
     const data = e?.response?.data || { error: 'Supabase proxy error' };
+    logCriticalIfSupabaseHtml(data, 'ALL /supabase/* (error)');
     console.error('[Server] Supabase catch-all proxy error', { status, data });
     return res.status(status).json(data);
   }

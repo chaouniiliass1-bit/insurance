@@ -347,8 +347,8 @@ async function pollSunoTaskSafetyNet(taskId, profile_id) {
       const API_KEY = String(process.env.SUNO_API_KEY || process.env.EXPO_PUBLIC_SUNO_API_KEY || '').trim();
       const API_BASE = String(process.env.SUNO_API_URL || process.env.EXPO_PUBLIC_SUNO_BASE || 'https://api.api.box/api/v1').trim().replace(/\/+$/, '');
       const authHeader = API_KEY.toLowerCase().startsWith('bearer ') ? API_KEY : `Bearer ${API_KEY}`;
-      const maxAttempts = 20;
-      const intervalMs = 3000;
+      const maxAttempts = 150;
+      const intervalMs = 2000;
 
       const normalizeCandidate = (v) => {
         if (typeof v !== 'string') return null;
@@ -458,7 +458,7 @@ async function pollSunoTaskSafetyNet(taskId, profile_id) {
     } catch (e) {
       console.warn('[Server] SafetyNet poll crashed', e?.message || e);
     }
-  }, 500);
+  }, 2000);
 }
 
 io.on('connection', (socket) => {
@@ -1336,13 +1336,24 @@ app.post('/proxy/suno/generate', async (req, res) => {
       return res.status(400).json({ error: 'Prompt too long (max 500 characters).' });
     }
     const tags = Array.isArray(req.body?.tags) ? req.body.tags : [];
+    const instrumental = (() => {
+      const v = req.body?.instrumental ?? req.body?.isInstrumental;
+      if (typeof v === 'boolean') return v;
+      if (typeof v === 'string') {
+        const s = v.trim().toLowerCase();
+        if (s === 'true' || s === '1' || s === 'yes') return true;
+        if (s === 'false' || s === '0' || s === 'no') return false;
+      }
+      const mode = String(req.body?.vocalMode || req.body?.mode || '').trim().toLowerCase();
+      return mode === 'instrumental';
+    })();
     // Send JSON payload — some providers strictly require JSON body
     const payload = {
       prompt,
       tags,
       customMode: false,
-      instrumental: false,
-      model: 'V3_5',
+      instrumental,
+      model: 'suno-v3.5',
       image_style: 'minimal',
       callback_url: CALLBACK_URL,
       callbackUrl: CALLBACK_URL,
@@ -1492,7 +1503,11 @@ async function handleSunoCallback(req, res) {
     const ua = req.headers['user-agent'];
     const ct = req.headers['content-type'];
     const ip = req.ip || req.connection?.remoteAddress || 'unknown';
+    const isHutool = String(ua || '').toLowerCase().includes('hutool');
     console.log('[Server] RECEIVED CALLBACK FROM SUNO', { ip, xf, ct, ua });
+    if (isHutool) {
+      try { console.log('[Server] Hutool callback UA detected; forcing non-blocking 200 flow'); } catch {}
+    }
     const profile_id = String(req.query?.profile_id || '').trim();
     const body = req.body || {};
     const code = body.code;
@@ -1663,9 +1678,6 @@ async function handleSunoCallback(req, res) {
         console.log('[Server] Callback has items but no audio_url yet', { firstItemKeys: k });
       } catch {}
     }
-
-    // Validate we have at least one good audio URL
-    const isValidAudio = Array.isArray(urls) && urls.length > 0;
     const statusSignal =
       data?.status ||
       data?.state ||
@@ -1679,6 +1691,20 @@ async function handleSunoCallback(req, res) {
       statusUpper === 'SUCCESS' ||
       statusUpper.endsWith('_SUCCESS') ||
       statusUpper.includes('COMPLETE');
+    if (isCompleteSignal && urls.length === 0) {
+      try { console.log('COMPLETE DATA DUMP:', JSON.stringify(req.body?.data?.[0] || req.body?.data?.data?.[0] || items?.[0] || null)); } catch {}
+      try {
+        const direct0 = req.body?.data?.[0]?.audio_url || req.body?.data?.data?.[0]?.audio_url || items?.[0]?.audio_url || null;
+        const normalized0 = normalizeCandidate(direct0);
+        if (normalized0 && normalized0.startsWith('http')) {
+          urls.push(normalized0);
+          console.log('[Server] Override urls_len=0 with direct audio_url', { task_id, url: normalized0 });
+        }
+      } catch {}
+    }
+
+    // Validate we have at least one good audio URL
+    const isValidAudio = Array.isArray(urls) && urls.length > 0;
 
     if (Number(code) === 200 && isCompleteSignal && !isValidAudio && Array.isArray(items) && items.length) {
       try { console.log('COMPLETE DATA DUMP:', JSON.stringify(items[0])); } catch {}

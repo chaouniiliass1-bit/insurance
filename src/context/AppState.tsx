@@ -905,10 +905,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           setGenerationProgress(0);
           setIsRequesting(false);
           setIsPreloading(false);
-          setStatusLabel('');
+          setStatusLabel('Still Cooking… Tap Generate again to retry.');
           currentTaskIdRef.current = null;
         }, 5 * 60 * 1000);
 
+      } else {
+        setStatusLabel('Generation failed — invalid response. Please try again.');
+        setIsGenerating(false);
+        setIsRequesting(false);
+        setIsPreloading(false);
+        setHasStartedPlayback(false);
       }
     } catch (e) {
       // Improve UX: reflect credit exhaustion and errors clearly

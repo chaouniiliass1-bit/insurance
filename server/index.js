@@ -1345,15 +1345,19 @@ app.post('/proxy/suno/generate', async (req, res) => {
         if (s === 'false' || s === '0' || s === 'no') return false;
       }
       const mode = String(req.body?.vocalMode || req.body?.mode || '').trim().toLowerCase();
-      return mode === 'instrumental';
+      if (mode === 'instrumental') return true;
+      if (mode === 'lyrics') return false;
+      const p = prompt.toLowerCase();
+      if (p.includes('instrumental') || p.includes('no vocals') || p.includes('no vocal')) return true;
+      if (p.includes('lyrics') || p.includes('with vocals')) return false;
+      return false;
     })();
     // Send JSON payload — some providers strictly require JSON body
-    const payload = {
+    const payloadBase = {
       prompt,
       tags,
       customMode: false,
       instrumental,
-      model: 'suno-v3.5',
       image_style: 'minimal',
       callback_url: CALLBACK_URL,
       callbackUrl: CALLBACK_URL,
@@ -1366,7 +1370,7 @@ app.post('/proxy/suno/generate', async (req, res) => {
     }
 
     const url = `${API_BASE}/generate`;
-    console.log('[Server] Forwarding Suno generate', { url, prompt, tags, customMode: payload.customMode, instrumental: payload.instrumental, callback: CALLBACK_URL, callbackSource });
+    console.log('[Server] Forwarding Suno generate', { url, prompt, tags, customMode: payloadBase.customMode, instrumental: payloadBase.instrumental, callback: CALLBACK_URL, callbackSource });
     console.log('[Server] Callback URL compare', {
       isRailway: !!process.env.RAILWAY_STATIC_URL,
       railwayStaticRaw: String(process.env.RAILWAY_STATIC_URL || ''),
@@ -1382,7 +1386,15 @@ app.post('/proxy/suno/generate', async (req, res) => {
       apiBaseFinal: API_BASE,
       apiBaseHadTrailingSlash: /\/\s*$/.test(String(process.env.SUNO_API_URL || process.env.EXPO_PUBLIC_SUNO_BASE || '')),
     });
-    try { console.log('Sending Payload to Suno:', JSON.stringify(payload)); } catch {}
+    const modelCandidates = ['V3_5', 'v3.5', 'V3_0'];
+    const isModelError = (data) => {
+      try {
+        const d = JSON.stringify(data || {}).toLowerCase();
+        return d.includes('model') && (d.includes('error') || d.includes('invalid') || d.includes('not support'));
+      } catch {
+        return false;
+      }
+    };
     
     const authCandidates = (() => {
       const k = String(API_KEY || '').trim();
@@ -1397,17 +1409,38 @@ app.post('/proxy/suno/generate', async (req, res) => {
       try {
         authHeaderUsed = authHeader;
         console.log('[Server] Using Auth mode:', authHeader.toLowerCase().startsWith('bearer ') ? 'bearer' : 'raw');
-        resp = await axios.post(url, payload, {
-          headers: {
-            Authorization: authHeader,
-            'Content-Type': 'application/json',
-            Accept: 'application/json, text/plain, */*',
-            'User-Agent': 'Mozilla/5.0',
-          },
-          httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
-          timeout: 60_000,
-        });
-        break;
+        for (const model of modelCandidates) {
+          const payload = { ...payloadBase, model };
+          try { console.log('Sending Payload to Suno:', JSON.stringify(payload)); } catch {}
+          try {
+            resp = await axios.post(url, payload, {
+              headers: {
+                Authorization: authHeader,
+                'Content-Type': 'application/json',
+                Accept: 'application/json, text/plain, */*',
+                'User-Agent': 'Mozilla/5.0',
+              },
+              httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
+              timeout: 60_000,
+            });
+            break;
+          } catch (e) {
+            lastAuthErr = e;
+            const st = e?.response?.status || 0;
+            const dat = e?.response?.data || null;
+            if (st === 400) {
+              try { console.log('[Server] Suno 400 payload dump:', JSON.stringify(payload)); } catch {}
+              try { console.warn('[Server] Suno 400 response:', dat); } catch {}
+              if (isModelError(dat) && model !== 'V3_0') {
+                console.warn('[Server] Model error, retrying with next model', { modelTried: model });
+                continue;
+              }
+            }
+            if (st === 401) break;
+            throw e;
+          }
+        }
+        if (resp) break;
       } catch (e) {
         lastAuthErr = e;
         const st = e?.response?.status || 0;

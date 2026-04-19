@@ -97,6 +97,8 @@ export async function generateSunoTrack(
   const payload = {
     prompt,
     tags,
+    instrumental: vocalMode === 'instrumental',
+    vocalMode: vocalMode || 'lyrics',
     callback_url: cbUrl,
     callbackUrl: cbUrl,
     callBackUrl: cbUrl,
@@ -125,7 +127,7 @@ export async function generateSunoTrack(
             },
             body: JSON.stringify(payload),
           },
-          10000
+          60000
         );
         break;
       } catch (e) {

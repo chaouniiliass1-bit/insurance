@@ -104,6 +104,10 @@ app.use(express.urlencoded({ extended: true }));
 // Broaden CORS to include OPTIONS and common headers for XHR polling
 app.use(cors({ origin: corsOrigin, methods: ['GET', 'POST', 'OPTIONS'], credentials: false }));
 app.options('*', cors({ origin: corsOrigin, methods: ['GET', 'POST', 'OPTIONS'], credentials: false }));
+const callbackCors = cors({ origin: true, methods: ['POST', 'OPTIONS'], credentials: false });
+app.options('/suno-callback', callbackCors);
+app.options('/proxy/suno/callback', callbackCors);
+app.use(['/suno-callback', '/proxy/suno/callback'], callbackCors);
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -338,7 +342,7 @@ app.get('/debug/tasks', (req, res) => {
 app.get('/debug/suno', (req, res) => {
   try {
     const API_KEY = (process.env.SUNO_API_KEY || process.env.EXPO_PUBLIC_SUNO_API_KEY || '').trim();
-    const API_BASE = (process.env.EXPO_PUBLIC_SUNO_BASE || 'https://api.api.box/api/v1').trim().replace(/\/+$/, '');
+    const API_BASE = (process.env.SUNO_API_URL || process.env.EXPO_PUBLIC_SUNO_BASE || 'https://api.api.box/api/v1').trim().replace(/\/+$/, '');
     const cb = String(process.env.EXPO_PUBLIC_SUNO_CALLBACK_URL || '').trim();
     const dryRun = String(process.env.SUNO_DRY_RUN || '').trim() === '1';
     return res.json({
@@ -1049,7 +1053,10 @@ app.post('/proxy/suno/generate', async (req, res) => {
     const FALLBACK_ON_ERROR = String(process.env.SUNO_FALLBACK_ON_ERROR || '').trim() === '1';
     const missingKey = API_KEY.includes('your-suno-api-key') || !API_KEY;
     const sanitizeBase = (url) => {
-      const raw = String(url || '').trim().replace(/\/+$/, '');
+      const raw = String(url || '')
+        .trim()
+        .replace(/\)+$/, '')
+        .replace(/\/+$/, '');
       if (!raw) return '';
       if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
       return `https://${raw}`;
@@ -1068,7 +1075,11 @@ app.post('/proxy/suno/generate', async (req, res) => {
         envCallback: computedEnvCallback,
       });
     } catch {}
-    const sanitizeCb = (url) => String(url || '').trim().replace(/\/+$/, '');
+    const sanitizeCb = (url) =>
+      String(url || '')
+        .trim()
+        .replace(/\)+$/, '')
+        .replace(/\/+$/, '');
     const bodyCb = sanitizeCb(req.body?.callback_url || req.body?.callbackUrl || req.body?.callBackUrl || '');
     const envCb = sanitizeCb(computedEnvCallback);
     // Use CURRENT_PUBLIC_URL if available (most reliable), then env, then client
@@ -1105,6 +1116,7 @@ app.post('/proxy/suno/generate', async (req, res) => {
       CALLBACK_URL = `https://${CALLBACK_URL.slice('http://'.length)}`;
       callbackSource += '_fixed_https';
     }
+    CALLBACK_URL = CALLBACK_URL.replace(/\)+$/, '');
 
     // FIX: Box AI / API Box specific callback requirement
     // If the URL contains 'serveousercontent.com', ensure it is HTTPS
@@ -1158,6 +1170,21 @@ app.post('/proxy/suno/generate', async (req, res) => {
 
     const url = `${API_BASE}/generate`;
     console.log('[Server] Forwarding Suno generate', { url, prompt, tags, customMode: payload.customMode, instrumental: payload.instrumental, callback: CALLBACK_URL, callbackSource });
+    console.log('[Server] Callback URL compare', {
+      isRailway: !!process.env.RAILWAY_STATIC_URL,
+      railwayStaticRaw: String(process.env.RAILWAY_STATIC_URL || ''),
+      appUrlRaw: String(process.env.APP_URL || ''),
+      envCallbackRaw: String(process.env.EXPO_PUBLIC_SUNO_CALLBACK_URL || ''),
+      callbackFinal: CALLBACK_URL,
+      callbackSource,
+    });
+    console.log('[Server] Suno env mirror', {
+      hasKey: !!String(process.env.SUNO_API_KEY || '').trim(),
+      keyLen: String(process.env.SUNO_API_KEY || '').trim().length,
+      apiBaseRaw: String(process.env.SUNO_API_URL || process.env.EXPO_PUBLIC_SUNO_BASE || ''),
+      apiBaseFinal: API_BASE,
+      apiBaseHadTrailingSlash: /\/\s*$/.test(String(process.env.SUNO_API_URL || process.env.EXPO_PUBLIC_SUNO_BASE || '')),
+    });
     try { console.log('Sending Payload to Suno:', JSON.stringify(payload)); } catch {}
     
     const authCandidates = (() => {

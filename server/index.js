@@ -327,8 +327,8 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
               await new Promise((r) => setTimeout(r, intervalMs));
               continue;
             }
-            const primaryDownload = downloadCandidates[0] || null;
-            const sig = `early|${primaryStream}|${primaryDownload || ''}`;
+            const primaryDownload = null;
+            const sig = `early|${primaryStream}`;
             const prevSig = lastSigByTask.get(tid) || null;
             lastSigByTask.set(tid, sig);
             if (!prevSig || prevSig !== sig) {

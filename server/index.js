@@ -1,12 +1,23 @@
 const dotenv = require('dotenv');
 dotenv.config({ path: '.env' });
 dotenv.config({ path: '.env.local', override: true });
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const normalizeSecret = (raw) => {
+  let v = String(raw || '').trim();
+  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+    v = v.slice(1, -1).trim();
+  }
+  if (v.toLowerCase().startsWith('bearer ')) {
+    v = v.slice('bearer '.length).trim();
+  }
+  v = v.replace(/\r?\n/g, '').trim();
+  return v;
+};
+const SERVICE_KEY = normalizeSecret(process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY);
 if (!SERVICE_KEY) {
   console.error('CRITICAL ERROR: SUPABASE_SERVICE_ROLE_KEY IS UNDEFINED IN ENVIRONMENT');
 }
 console.log('Supabase Auth Attempt with key starting with:', SERVICE_KEY?.substring(0, 5));
-const URL = (process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL || '').replace(/\/$/, '');
+const URL = String(process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL || '').trim().replace(/\/$/, '');
 try {
   console.log('DB Config Check:', {
     hasUrl: !!(process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL),

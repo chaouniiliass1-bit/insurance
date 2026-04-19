@@ -59,6 +59,62 @@ function normalizeExternalUrl(input) {
   return s;
 }
 
+function extractUrlsAllKeys(root) {
+  const results = [];
+  const visited = new Set();
+  const stack = [{ value: root, path: '$', depth: 0 }];
+  const maxDepth = 8;
+  const maxNodes = 3000;
+  const maxResults = 80;
+  let nodes = 0;
+
+  const add = (raw, path) => {
+    const s = normalizeExternalUrl(raw);
+    if (!s) return;
+    if (!s.startsWith('http://') && !s.startsWith('https://')) return;
+    const low = s.toLowerCase();
+    if (!(low.includes('removeai.ai') || low.includes('suno.ai'))) return;
+    if (results.some((r) => r.url === s)) return;
+    const idxMatch = String(path || '').match(/\[(\d+)\]/);
+    const index = idxMatch ? Number(idxMatch[1]) : null;
+    const isMp3 = low.endsWith('.mp3');
+    const isStreamKey = String(path || '').toLowerCase().includes('stream');
+    const isPrimaryStream = low.includes('musicfile.removeai.ai');
+    results.push({ url: s, path: String(path || ''), index, isMp3, isStreamKey, isPrimaryStream });
+  };
+
+  while (stack.length && nodes < maxNodes && results.length < maxResults) {
+    const cur = stack.pop();
+    if (!cur) break;
+    const { value, path, depth } = cur;
+    if (value == null) continue;
+    if (depth > maxDepth) continue;
+    if (typeof value === 'string') {
+      add(value, path);
+      continue;
+    }
+    if (typeof value !== 'object') continue;
+    if (visited.has(value)) continue;
+    visited.add(value);
+    nodes += 1;
+    if (Array.isArray(value)) {
+      for (let i = 0; i < value.length; i++) {
+        stack.push({ value: value[i], path: `${path}[${i}]`, depth: depth + 1 });
+      }
+      continue;
+    }
+    const obj = value;
+    const keys = Object.keys(obj);
+    for (const k of keys) {
+      const v = obj[k];
+      const nextPath = `${path}.${k}`;
+      if (typeof v === 'string') add(v, nextPath);
+      else stack.push({ value: v, path: nextPath, depth: depth + 1 });
+    }
+  }
+  return results;
+}
+
 function normalizeOrigin(input) {
   if (!input || typeof input !== 'string') return null;
   const raw = input.trim();
@@ -324,53 +380,38 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
           return null;
         })();
         const baseTitle = pickedTitle || 'New Track';
-        const trackItemsForIndex = (() => {
-          try {
-            const hasTrackShape = (it) =>
-              !!it &&
-              (typeof it.stream_audio_url === 'string' ||
-                typeof it.source_stream_audio_url === 'string' ||
-                typeof it.audio_url === 'string' ||
-                typeof it.url === 'string');
-            if (Array.isArray(listA) && listA.some(hasTrackShape)) return listA;
-            if (Array.isArray(listB) && listB.some(hasTrackShape)) return listB;
-            if (Array.isArray(allItems) && allItems.some(hasTrackShape)) return allItems;
-          } catch {}
-          return metaCandidates;
-        })();
         const streamByIndex = [];
         const mp3ByIndex = [];
-        for (let i = 0; i < Math.min(2, trackItemsForIndex.length); i++) {
-          const it = trackItemsForIndex[i] || {};
-          const stream =
-            normalizeExternalUrl(it?.stream_audio_url) ||
-            normalizeExternalUrl(it?.streamAudioUrl) ||
-            normalizeExternalUrl(it?.source_stream_audio_url) ||
-            normalizeExternalUrl(it?.sourceStreamAudioUrl) ||
-            normalizeExternalUrl(it?.music_url) ||
-            normalizeExternalUrl(it?.musicUrl) ||
-            normalizeExternalUrl(it?.proxy_url) ||
-            normalizeExternalUrl(it?.proxyUrl) ||
-            null;
-          if (stream && stream.startsWith('http') && !stream.toLowerCase().endsWith('.mp3')) {
-            try {
-              const u = new URL(stream);
-              const host = u.hostname.toLowerCase();
-              const isHttps = u.protocol === 'https:';
-              const isHttp = u.protocol === 'http:';
-              const isLocal = host.includes('localhost') || host === '127.0.0.1';
-              if (((IS_DEV && (isHttps || isHttp)) || (!IS_DEV && isHttps)) && !isLocal && isAllowedSunoHost(host)) {
-                streamByIndex[i] = stream;
-              }
-            } catch {}
+        const allKeyUrls = extractUrlsAllKeys(payload);
+        for (const entry of allKeyUrls) {
+          try {
+            const u = new URL(entry.url);
+            const host = u.hostname.toLowerCase();
+            const isHttps = u.protocol === 'https:';
+            const isHttp = u.protocol === 'http:';
+            const isLocal = host.includes('localhost') || host === '127.0.0.1';
+            if (!(((IS_DEV && (isHttps || isHttp)) || (!IS_DEV && isHttps)) && !isLocal && isAllowedSunoHost(host))) continue;
+          } catch {
+            continue;
           }
-          const mp3 =
-            normalizeExternalUrl(it?.audio_url) ||
-            normalizeExternalUrl(it?.audioUrl) ||
-            normalizeExternalUrl(it?.source_audio_url) ||
-            normalizeExternalUrl(it?.sourceAudioUrl) ||
-            null;
-          if (mp3 && mp3.startsWith('http') && mp3.toLowerCase().endsWith('.mp3')) mp3ByIndex[i] = mp3;
+          const idx = typeof entry.index === 'number' && entry.index >= 0 && entry.index <= 1 ? entry.index : null;
+          if (entry.isMp3) {
+            if (idx != null) {
+              if (!mp3ByIndex[idx]) mp3ByIndex[idx] = entry.url;
+            } else {
+              if (!mp3ByIndex[0]) mp3ByIndex[0] = entry.url;
+              else if (!mp3ByIndex[1]) mp3ByIndex[1] = entry.url;
+            }
+            continue;
+          }
+          if (entry.isPrimaryStream || entry.isStreamKey || entry.url.toLowerCase().includes('removeai.ai')) {
+            if (idx != null) {
+              if (!streamByIndex[idx] || entry.isPrimaryStream) streamByIndex[idx] = entry.url;
+            } else {
+              if (!streamByIndex[0]) streamByIndex[0] = entry.url;
+              else if (!streamByIndex[1]) streamByIndex[1] = entry.url;
+            }
+          }
         }
         const urls = [streamByIndex[0], streamByIndex[1]].filter((x) => typeof x === 'string');
         console.log('[Server] Poll record-info', { taskId: tid, attempt, status: statusStr || status, urls_len: urls.length, elapsedMs });

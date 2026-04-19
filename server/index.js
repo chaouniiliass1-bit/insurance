@@ -51,6 +51,7 @@ function normalizeExternalUrl(input) {
   let s = input.trim();
   if (!s) return null;
   s = s.replace(/^[`"'“”]+/, '').replace(/[`"'“”]+$/, '').trim();
+  s = s.replace(/[`"'“”]/g, '').trim();
   if (s.startsWith('//')) s = `https:${s}`;
   if (s.includes('removeai.ai') && !s.startsWith('http://') && !s.startsWith('https://')) {
     s = `https://${s.replace(/^\/+/, '')}`;
@@ -174,10 +175,12 @@ async function upsertTracksForProfile(profile_id, urls, download_url, title, cov
         profile_id: pid,
         audio_url: u,
         stream_url: u,
-        mp3_url: typeof download_url === 'string' && download_url.startsWith('http') ? download_url : null,
         title: titles[i] || baseTitle,
         image_url: typeof cover === 'string' ? cover : null,
       };
+      if (typeof download_url === 'string' && download_url.startsWith('http')) {
+        row.mp3_url = download_url;
+      }
       const existing = await supabaseAdmin.from('tracks').select('id').eq('profile_id', pid).eq('audio_url', u).limit(1);
       const id = Array.isArray(existing?.data) && existing.data[0]?.id ? existing.data[0].id : null;
       if (id) await supabaseAdmin.from('tracks').update(row).eq('id', id);
@@ -244,12 +247,6 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
             io.to(room).emit('suno:status', { task_id: tid, status: statusStr, message: statusStr === 'TEXT_SUCCESS' ? 'Still Cooking…' : 'Finalizing track…' });
           } catch {}
         }
-        if (statusStr !== 'SUCCESS') {
-          const elapsedMs = Date.now() - (taskStartedAtMsById.get(tid) || Date.now());
-          console.log('[Server] Poll record-info (not ready)', { taskId: tid, attempt, status: statusStr || status, elapsedMs });
-          await new Promise((r) => setTimeout(r, intervalMs));
-          continue;
-        }
         const response = d?.response || {};
         const candidates = [];
         const downloadCandidates = [];
@@ -311,7 +308,43 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
           if (urls.length >= 2) break;
         }
         const elapsedMs = Date.now() - (taskStartedAtMsById.get(tid) || Date.now());
-        console.log('[Server] Poll record-info', { taskId: tid, attempt, status, urls_len: urls.length, elapsedMs });
+        console.log('[Server] Poll record-info', { taskId: tid, attempt, status: statusStr || status, urls_len: urls.length, elapsedMs });
+
+        if (statusStr !== 'SUCCESS') {
+          if (urls.length) {
+            const playUrls = urls.filter((u) => {
+              const low = String(u || '').toLowerCase();
+              if (low.includes('musicfile.removeai.ai')) return true;
+              if (low.endsWith('.mp3')) return false;
+              return true;
+            });
+            const primaryStream =
+              playUrls.find((u) => String(u || '').toLowerCase().includes('musicfile.removeai.ai')) ||
+              playUrls[0] ||
+              urls[0];
+            if (String(primaryStream || '').toLowerCase().endsWith('.mp3')) {
+              await new Promise((r) => setTimeout(r, intervalMs));
+              continue;
+            }
+            const primaryDownload = downloadCandidates[0] || null;
+            const sig = `early|${primaryStream}|${primaryDownload || ''}`;
+            const prevSig = lastSigByTask.get(tid) || null;
+            lastSigByTask.set(tid, sig);
+            if (!prevSig || prevSig !== sig) {
+              console.log('EARLY CATCH: Found stream URL before completion:', primaryStream);
+              const out = { url: primaryStream, audio_url: primaryStream, stream_url: primaryStream, download_url: primaryDownload, urls: playUrls.length ? playUrls.slice(0, 2) : [primaryStream], cover: pickedCover, title: pickedTitle || 'New Track', task_id: tid, callbackType: 'poll_early', items: metaCandidates.slice(0, 2) };
+              if (room) {
+                try { io.to(room).emit('suno:track', out); } catch {}
+                try { await upsertTracksForProfile(room, [primaryStream], primaryDownload, pickedTitle, pickedCover, tid, 'poll_early'); } catch {}
+              } else {
+                io.emit('suno:track', out);
+              }
+            }
+          }
+          await new Promise((r) => setTimeout(r, intervalMs));
+          continue;
+        }
+
         if (urls.length) {
           try {
             for (const it of metaCandidates) {
@@ -1862,7 +1895,7 @@ async function handleSunoCallback(req, res) {
           console.warn('[Server] tracks upsert from callback failed', e?.message || e);
         }
       }
-      if (profile_id) {
+      if (profile_id && isCompleteSignal) {
         try { io.to(profile_id).emit('suno:status', { task_id: task_id ? String(task_id) : null, status: 'success', message: 'Ready' }); } catch {}
       }
       console.log('[Server] Extracted URLs', { task_id: task_id ? String(task_id) : null, callbackType, stream_url: primaryStream, mp3_url: primaryDownload });

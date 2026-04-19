@@ -489,6 +489,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       });
       client.on('suno:status', (evt: any) => {
         try { console.log('[Client] suno:status', evt); } catch {}
+        const st = String(evt?.status || '').toLowerCase();
+        if (st === 'success') {
+          setStatusLabel('');
+          return;
+        }
         const message = typeof evt?.message === 'string' ? evt.message : null;
         if (isGeneratingRef.current && message) {
           setStatusLabel(message);
@@ -584,8 +589,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           };
           const dlA = pickDownloadForUrl(firstOk);
           const dlB = secondOk ? pickDownloadForUrl(secondOk) : null;
-          const primaryA = dlA ?? firstOk;
-          const primaryB = secondOk ? (dlB ?? secondOk) : null;
+          const primaryA = firstOk ?? dlA;
+          const primaryB = secondOk ? (secondOk ?? dlB) : null;
 
           // Show "finalizing" label until COMPLETE, but do NOT block playback
           if (cbType !== 'complete') {

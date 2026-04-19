@@ -148,7 +148,7 @@ const RECENT_CALLBACKS_MAX = 200;
 const pollingByTaskId = new Map();
 // No device mapping; broadcast-only callbacks
 
-async function upsertTracksForProfile(profile_id, urls, title, cover, task_id, source) {
+async function upsertTracksForProfile(profile_id, urls, download_url, title, cover, task_id, source) {
   const pid = String(profile_id || '').trim();
   if (!pid) return;
   if (!Array.isArray(urls) || !urls.length) return;
@@ -161,8 +161,8 @@ async function upsertTracksForProfile(profile_id, urls, title, cover, task_id, s
       const row = {
         profile_id: pid,
         audio_url: u,
-        mp3_url: u,
         stream_url: u,
+        mp3_url: typeof download_url === 'string' && download_url.startsWith('http') ? download_url : u,
         title: titles[i] || baseTitle,
         image_url: typeof cover === 'string' ? cover : null,
       };
@@ -240,26 +240,38 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
         }
         const response = d?.response || {};
         const candidates = [];
+        const downloadCandidates = [];
         const metaCandidates = [];
         const add = (v) => {
           if (typeof v !== 'string') return;
           let s = v.trim();
           if (!s) return;
+          if (s.startsWith('//')) s = `https:${s}`;
           if (s.includes('removeai.ai') && !s.startsWith('http://') && !s.startsWith('https://')) {
             s = `https://${s.replace(/^\/+/, '')}`;
           }
-          candidates.push(s);
+          if (s.includes('musicfile.removeai.ai')) candidates.unshift(s);
+          else candidates.push(s);
+        };
+        const addDownload = (v) => {
+          if (typeof v !== 'string') return;
+          let s = v.trim();
+          if (!s) return;
+          if (s.startsWith('//')) s = `https:${s}`;
+          if (!s.startsWith('http://') && !s.startsWith('https://')) return;
+          const low = s.toLowerCase();
+          if (low.includes('aiquickdraw.com') || low.endsWith('.mp3')) downloadCandidates.push(s);
         };
         const listA = Array.isArray(response?.data) ? response.data : [];
         const listB = Array.isArray(response?.sunoData) ? response.sunoData : [];
         for (const it of [...listA, ...listB]) {
           metaCandidates.push(it);
-          add(it?.audio_url);
-          add(it?.audioUrl);
           add(it?.stream_audio_url);
           add(it?.streamAudioUrl);
           add(it?.source_stream_audio_url);
           add(it?.sourceStreamAudioUrl);
+          add(it?.audio_url);
+          add(it?.audioUrl);
           add(it?.source_audio_url);
           add(it?.sourceAudioUrl);
           add(it?.cdn_url);
@@ -269,6 +281,10 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
           add(it?.proxy_url);
           add(it?.proxyUrl);
           add(it?.url);
+          addDownload(it?.download_url);
+          addDownload(it?.downloadUrl);
+          addDownload(it?.mp3_url);
+          addDownload(it?.mp3Url);
         }
         const urls = [];
         let pickedTitle = null;
@@ -292,12 +308,12 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
           try {
             for (const it of metaCandidates) {
               const u0 =
-                it?.audio_url ||
-                it?.audioUrl ||
                 it?.stream_audio_url ||
                 it?.streamAudioUrl ||
                 it?.source_stream_audio_url ||
                 it?.sourceStreamAudioUrl ||
+                it?.audio_url ||
+                it?.audioUrl ||
                 it?.source_audio_url ||
                 it?.sourceAudioUrl ||
                 it?.url ||
@@ -314,9 +330,12 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
           lastSigByTask.set(tid, sig);
           if (!prevSig || prevSig !== sig) {
             console.log('[Server] Emitting suno:track (poll)', { taskId: tid, url: urls[0] });
-            const out = { url: urls[0], audio_url: urls[0], urls, cover: pickedCover, title: pickedTitle || 'New Track', task_id: tid, callbackType: 'poll', items: metaCandidates.slice(0, 2) };
+            const primaryStream = urls[0];
+            const primaryDownload = downloadCandidates[0] || null;
+            const out = { url: primaryStream, audio_url: primaryStream, stream_url: primaryStream, download_url: primaryDownload, urls: [primaryStream], cover: pickedCover, title: pickedTitle || 'New Track', task_id: tid, callbackType: 'poll', items: metaCandidates.slice(0, 2) };
             if (room) {
-              await upsertTracksForProfile(room, urls, pickedTitle, pickedCover, tid, 'poll');
+              try { io.to(room).emit('suno:status', { task_id: tid, status: 'success', message: 'Ready' }); } catch {}
+              await upsertTracksForProfile(room, [primaryStream], primaryDownload, pickedTitle, pickedCover, tid, 'poll');
             }
             if (room) io.to(room).emit('suno:track', out);
             else io.emit('suno:track', out);
@@ -395,6 +414,7 @@ async function pollSunoTaskSafetyNet(taskId, profile_id) {
         const response = d?.response || {};
 
         const candidates = [];
+        const downloadCandidates = [];
         const metaCandidates = [];
         const add = (v) => {
           const s = normalizeCandidate(v);
@@ -402,14 +422,20 @@ async function pollSunoTaskSafetyNet(taskId, profile_id) {
           if (s.includes('removeai.ai')) candidates.unshift(s);
           else candidates.push(s);
         };
+        const addDownload = (v) => {
+          const s = normalizeCandidate(v);
+          if (!s || (!s.startsWith('http://') && !s.startsWith('https://'))) return;
+          const low = s.toLowerCase();
+          if (low.includes('aiquickdraw.com') || low.endsWith('.mp3')) downloadCandidates.push(s);
+        };
 
         const listA = Array.isArray(response?.data) ? response.data : [];
         const listB = Array.isArray(response?.sunoData) ? response.sunoData : [];
         for (const it of [...listA, ...listB]) {
           metaCandidates.push(it);
-          add(it?.audio_url);
           add(it?.stream_audio_url);
           add(it?.source_stream_audio_url);
+          add(it?.audio_url);
           add(it?.url);
           add(it?.audioUrl);
           add(it?.streamAudioUrl);
@@ -421,6 +447,10 @@ async function pollSunoTaskSafetyNet(taskId, profile_id) {
           add(it?.musicUrl);
           add(it?.proxy_url);
           add(it?.proxyUrl);
+          addDownload(it?.download_url);
+          addDownload(it?.downloadUrl);
+          addDownload(it?.mp3_url);
+          addDownload(it?.mp3Url);
         }
 
         const urls = [];
@@ -441,10 +471,15 @@ async function pollSunoTaskSafetyNet(taskId, profile_id) {
         const elapsedMs = Date.now() - (taskStartedAtMsById.get(tid) || Date.now());
         console.log('[Server] SafetyNet poll record-info', { taskId: tid, attempt, status, urls_len: urls.length, elapsedMs });
         if (urls.length) {
+          const primaryStream = urls[0];
+          const primaryDownload = downloadCandidates[0] || null;
           try {
-            await upsertTracksForProfile(room || profile_id || null, urls, null, null, tid, 'safetynet');
+            await upsertTracksForProfile(room || profile_id || null, [primaryStream], primaryDownload, null, null, tid, 'safetynet');
           } catch {}
-          const out = { url: urls[0], audio_url: urls[0], urls, cover: null, title: 'New Track', task_id: tid, callbackType: 'safetynet', items: metaCandidates.slice(0, 2) };
+          if (room) {
+            try { io.to(room).emit('suno:status', { task_id: tid, status: 'success', message: 'Ready' }); } catch {}
+          }
+          const out = { url: primaryStream, audio_url: primaryStream, stream_url: primaryStream, download_url: primaryDownload, urls: [primaryStream], cover: null, title: 'New Track', task_id: tid, callbackType: 'safetynet', items: metaCandidates.slice(0, 2) };
           if (room) io.to(room).emit('suno:track', out);
           else io.emit('suno:track', out);
           return;
@@ -730,7 +765,7 @@ async function siphonToSupabaseStorage({ taskId, streamUrl, downloadUrl, trackKe
         } catch {}
       }
       if (!row?.id) return false;
-      const patch = { audio_url: publicUrl, mp3_url: publicUrl };
+      const patch = { mp3_url: publicUrl };
       if (typeof desiredTitle === 'string' && desiredTitle.trim().length) {
         patch.title = desiredTitle.trim();
       }
@@ -1575,9 +1610,9 @@ async function handleSunoCallback(req, res) {
     };
     for (const it of items) {
       const rawCand =
-        it?.audio_url ||
         it?.stream_audio_url ||
         it?.source_stream_audio_url ||
+        it?.audio_url ||
         it?.source_audio_url ||
         it?.streamAudioUrl ||
         it?.sourceStreamAudioUrl ||
@@ -1727,10 +1762,21 @@ async function handleSunoCallback(req, res) {
     if (isCompleteSignal && urls.length === 0) {
       try { console.log('COMPLETE DATA DUMP:', JSON.stringify(req.body?.data?.[0] || req.body?.data?.data?.[0] || items?.[0] || null)); } catch {}
       try {
-        const direct0 = req.body?.data?.[0]?.audio_url || req.body?.data?.data?.[0]?.audio_url || items?.[0]?.audio_url || null;
+        const direct0 =
+          req.body?.data?.[0]?.stream_audio_url ||
+          req.body?.data?.data?.[0]?.stream_audio_url ||
+          req.body?.data?.[0]?.source_stream_audio_url ||
+          req.body?.data?.data?.[0]?.source_stream_audio_url ||
+          req.body?.data?.[0]?.audio_url ||
+          req.body?.data?.data?.[0]?.audio_url ||
+          items?.[0]?.stream_audio_url ||
+          items?.[0]?.source_stream_audio_url ||
+          items?.[0]?.audio_url ||
+          null;
         const normalized0 = normalizeCandidate(direct0);
         if (normalized0 && normalized0.startsWith('http')) {
-          urls.push(normalized0);
+          if (normalized0.includes('musicfile.removeai.ai')) urls.unshift(normalized0);
+          else urls.push(normalized0);
           console.log('[Server] Override urls_len=0 with direct audio_url', { task_id, url: normalized0 });
         }
       } catch {}
@@ -1744,9 +1790,9 @@ async function handleSunoCallback(req, res) {
       try {
         const it = items[0] || {};
         const direct =
-          normalizeCandidate(it?.audio_url) ||
           normalizeCandidate(it?.stream_audio_url) ||
           normalizeCandidate(it?.source_stream_audio_url) ||
+          normalizeCandidate(it?.audio_url) ||
           normalizeCandidate(it?.url) ||
           null;
         if (direct && direct.startsWith('http')) {
@@ -1795,6 +1841,14 @@ async function handleSunoCallback(req, res) {
       console.log('[Server] Emitting suno:track (broadcast)', { task_id, callbackType, url: finalUrl });
       const baseTitle = typeof title === 'string' && title.trim().length ? title.trim() : 'New Track';
       const titles = urls.length >= 2 ? [baseTitle, `${baseTitle} 2`] : [baseTitle];
+      const primaryStream = finalUrl;
+      const primaryDownload = (() => {
+        const dl = String(siphonJobs?.[0]?.downloadUrl || '').trim();
+        if (!dl || !dl.startsWith('http')) return null;
+        const low = dl.toLowerCase();
+        if (low.includes('aiquickdraw.com') || low.endsWith('.mp3')) return dl;
+        return null;
+      })();
       if (profile_id) {
         try {
           for (let i = 0; i < Math.min(2, urls.length); i++) {
@@ -1803,8 +1857,8 @@ async function handleSunoCallback(req, res) {
             const row = {
               profile_id,
               audio_url: u,
-              mp3_url: u,
               stream_url: u,
+              mp3_url: primaryDownload || u,
               title: titles[i] || baseTitle,
               image_url: typeof cover === 'string' ? cover : null,
             };
@@ -1820,7 +1874,10 @@ async function handleSunoCallback(req, res) {
           console.warn('[Server] tracks upsert from callback failed', e?.message || e);
         }
       }
-      const payload = { url: audio_url, audio_url, urls, cover, title: baseTitle, titles, task_id, callbackType, items };
+      if (profile_id) {
+        try { io.to(profile_id).emit('suno:status', { task_id: task_id ? String(task_id) : null, status: 'success', message: 'Ready' }); } catch {}
+      }
+      const payload = { url: primaryStream, audio_url: primaryStream, stream_url: primaryStream, download_url: primaryDownload, urls, cover, title: baseTitle, titles, task_id, callbackType, items };
       if (profile_id) io.to(profile_id).emit('suno:track', payload);
       else io.emit('suno:track', payload);
       for (let i = 0; i < Math.min(2, siphonJobs.length); i++) {

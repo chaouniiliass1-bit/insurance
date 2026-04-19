@@ -294,7 +294,8 @@ export default function LibraryScreen() {
     const audioUrl = normalizeTapUrl(item?.audio_url || null);
     const coverUrl = normalizeTapUrl(item?.image_url || null);
     const mp3Url = normalizeTapUrl(item?.mp3_url || null);
-    const playbackUrl = mp3Url || audioUrl;
+    const streamUrl = normalizeTapUrl(item?.stream_url || null);
+    const playbackUrl = streamUrl || audioUrl || mp3Url;
     const isActive = !!trackUrl && trackUrl === playbackUrl;
     const isSecuring = !mp3Url || !mp3Url.includes('/storage/v1/object/public/');
     const stableKey = (id || item?.stream_url || audioUrl || title) as string;
@@ -311,8 +312,8 @@ export default function LibraryScreen() {
             try { await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
             setBufferingKey(stableKey);
             try {
-              const primary = mp3Url || playbackUrl;
-              const fallback = mp3Url ? (audioUrl || null) : null;
+              const primary = playbackUrl;
+              const fallback = playbackUrl !== mp3Url ? (mp3Url || null) : null;
               await playUrl(primary, title, coverUrl, id, liked, fallback);
             } catch {}
             setBufferingKey(null);

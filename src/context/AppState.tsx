@@ -396,33 +396,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         const n = normalizeBase(u);
         if (n) list.push(n);
       };
-      if (Platform.OS === 'web') {
-        add('http://localhost:8788');
-        add('http://127.0.0.1:8788');
-        try {
-          // @ts-ignore
-          const host = typeof window !== 'undefined' ? window.location.hostname : '';
-          if (host && host !== 'localhost' && host !== '127.0.0.1') {
-            add(`http://${host}:8788`);
-          }
-        } catch {}
-      }
-      try {
-        const hostUri =
-          // @ts-ignore
-          (Constants as any)?.expoConfig?.hostUri ||
-          // @ts-ignore
-          (Constants as any)?.manifest?.hostUri ||
-          // @ts-ignore
-          (Constants as any)?.manifest?.debuggerHost ||
-          '';
-        if (typeof hostUri === 'string' && hostUri.length) {
-          const host = hostUri.split(':')[0];
-          if (host && host !== 'localhost' && host !== '127.0.0.1') {
-            add(`http://${host}:8788`);
-          }
-        }
-      } catch {}
       add(envUrl);
       add(cfgUrl);
       return Array.from(new Set(list));

@@ -1,6 +1,6 @@
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import { TUNNEL_BYPASS_HEADER, withTunnelBypassHeaders } from './base';
+import { requireApiBase, TUNNEL_BYPASS_HEADER, withTunnelBypassHeaders } from './base';
 
 type Params = { mood: string; genre1: string; genre2: string; vocalMode?: 'lyrics' | 'instrumental'; profileId?: string | null };
 
@@ -26,56 +26,17 @@ function fetchTimeout(url: string, opts: RequestInit = {}, ms = 30000) {
 
 // Build callback URL strictly from runtime API base; no public-origin overrides
 function resolveCallbackUrl(): string {
-  // Prefer the explicitly configured public callback URL (e.g. Serveo/Ngrok)
   if (Constants?.expoConfig?.extra?.EXPO_PUBLIC_SUNO_CALLBACK_URL) {
     return Constants.expoConfig.extra.EXPO_PUBLIC_SUNO_CALLBACK_URL;
   }
-  const API_BASE = String(Constants?.expoConfig?.extra?.apiUrl || '').trim().replace(/\/$/, '');
-  if (!API_BASE) throw new Error('EXPO_PUBLIC_API_URL must be set to your public backend base URL');
+  const API_BASE = requireApiBase();
   return `${API_BASE}/suno-callback`;
 }
 
 function resolveApiBaseCandidates(): string[] {
-  const raw =
-    String(Constants?.expoConfig?.extra?.apiUrl || '').trim() ||
-    String(Constants?.expoConfig?.extra?.EXPO_PUBLIC_API_URL || '').trim();
-  const cleaned = raw.replace(/\/$/, '');
+  const base = requireApiBase();
   const candidates: string[] = [];
-  if (Platform.OS === 'web') {
-    candidates.push('http://localhost:8788');
-    candidates.push('http://127.0.0.1:8788');
-  }
-  if (cleaned) candidates.push(cleaned);
-
-  try {
-    const hostUri =
-      // @ts-ignore
-      (Constants as any)?.expoConfig?.hostUri ||
-      // @ts-ignore
-      (Constants as any)?.manifest?.hostUri ||
-      // @ts-ignore
-      (Constants as any)?.manifest?.debuggerHost ||
-      '';
-    if (typeof hostUri === 'string' && hostUri.length) {
-      const host = hostUri.split(':')[0];
-      if (host && host !== 'localhost' && host !== '127.0.0.1') {
-        candidates.push(`http://${host}:8788`);
-      }
-    }
-  } catch {}
-
-  if (Platform.OS === 'web') {
-    const port = (() => {
-      try {
-        const m = cleaned.match(/:(\d+)(\/)?$/);
-        if (m?.[1]) return Number(m[1]);
-      } catch {}
-      return 8788;
-    })();
-    candidates.push(`http://localhost:${port}`);
-    candidates.push(`http://127.0.0.1:${port}`);
-  }
-
+  if (base) candidates.push(base);
   return Array.from(new Set(candidates)).filter((u) => /^https?:\/\//.test(u));
 }
 

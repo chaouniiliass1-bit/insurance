@@ -5,9 +5,19 @@ export const TUNNEL_BYPASS_HEADER = { 'Bypass-Tunnel-Reminder': 'true' } as cons
 function readApiUrlFromExpo(): string {
   try {
     const extra: any = Constants?.expoConfig?.extra || {};
-    const url = String(extra?.apiUrl || '').trim();
+    const url =
+      String(extra?.apiUrl || '').trim() ||
+      String(extra?.EXPO_PUBLIC_API_URL || '').trim() ||
+      String((process as any)?.env?.EXPO_PUBLIC_API_URL || '').trim() ||
+      String((process as any)?.env?.EXPO_PUBLIC_SOCKET_URL || '').trim();
     return url.replace(/\/$/, '');
   } catch {
+    try {
+      const url =
+        String((process as any)?.env?.EXPO_PUBLIC_API_URL || '').trim() ||
+        String((process as any)?.env?.EXPO_PUBLIC_SOCKET_URL || '').trim();
+      return url.replace(/\/$/, '');
+    } catch {}
     return '';
   }
 }

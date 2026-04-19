@@ -124,12 +124,13 @@ app.use(['/suno-callback', '/proxy/suno/callback'], callbackCors);
 
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: corsOrigin, methods: ['GET', 'POST', 'OPTIONS'], credentials: false },
+  cors: { origin: true, methods: ['GET', 'POST', 'OPTIONS'], credentials: false },
   path: '/socket',
   transports: ['websocket', 'polling'],
   pingTimeout: 60000,
   pingInterval: 25000,
   allowEIO3: true,
+  allowRequest: (_req, cb) => cb(null, true),
 });
 
 // Debug: log upgrade attempts reaching the HTTP server
@@ -532,6 +533,11 @@ async function pollSunoTaskSafetyNet(taskId, profile_id) {
 
 io.on('connection', (socket) => {
   try {
+    try {
+      const origin = socket?.handshake?.headers?.origin || null;
+      const ua = socket?.handshake?.headers?.['user-agent'] || null;
+      console.log('[Server] Socket handshake', { id: socket.id, origin, ua });
+    } catch {}
     const authPid = socket?.handshake?.auth?.profile_id ?? socket?.handshake?.auth?.profileId;
     const queryPid = socket?.handshake?.query?.profile_id ?? socket?.handshake?.query?.profileId;
     const pid = String(authPid || queryPid || '').trim();

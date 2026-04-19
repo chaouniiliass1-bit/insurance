@@ -360,8 +360,27 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       if (typeof raw !== 'string') return null;
       const t = raw.trim().replace(/\/$/, '');
       if (!t) return null;
-      if (t.startsWith('http://') || t.startsWith('https://')) return t;
-      return `http://${t}`;
+      if (t.startsWith('http://') || t.startsWith('https://')) {
+        if (t.startsWith('http://')) {
+          const host = t.slice('http://'.length).split('/')[0].toLowerCase();
+          const isLocal =
+            host.startsWith('localhost') ||
+            host.startsWith('127.0.0.1') ||
+            host.startsWith('10.') ||
+            host.startsWith('192.168.') ||
+            host.startsWith('172.');
+          if (!isLocal) return `https://${t.slice('http://'.length)}`;
+        }
+        return t;
+      }
+      const host = t.split('/')[0].toLowerCase();
+      const isLocal =
+        host.startsWith('localhost') ||
+        host.startsWith('127.0.0.1') ||
+        host.startsWith('10.') ||
+        host.startsWith('192.168.') ||
+        host.startsWith('172.');
+      return isLocal ? `http://${t}` : `https://${t}`;
     };
 
     const resolveSocketBases = () => {
@@ -422,13 +441,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         return io(base, {
           path: '/socket',
           transports,
+          upgrade: false,
+          rememberUpgrade: true,
           reconnection: true,
           reconnectionAttempts: Infinity,
-          reconnectionDelay: 500,
-          reconnectionDelayMax: 2000,
-          timeout: 10000,
-          forceNew: false, 
-          autoConnect: false,
+          reconnectionDelay: 1000,
+          reconnectionDelayMax: 5000,
+          timeout: 20000,
+          forceNew: true,
+          autoConnect: true,
+          auth: profileIdRef.current ? { profile_id: String(profileIdRef.current) } : undefined,
         });
       } catch (e) {
         console.warn('[Client] Socket init failed', e);
@@ -753,6 +775,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     baseIndex = 0;
     socketRef.current = connectSimple();
     if (socketRef.current) attachCoreHandlers(socketRef.current);
+    try { socketRef.current?.connect(); } catch {}
 
     // Monitor navigation state to optimize traffic
     const checkConnection = () => {
@@ -797,6 +820,20 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       socketRef.current?.disconnect();
     };
   }, []);
+
+  useEffect(() => {
+    try {
+      if (!profileId) return;
+      const s = socketRef.current;
+      if (!s) return;
+      try { (s as any).auth = { profile_id: String(profileId) }; } catch {}
+      if (s.connected) {
+        s.emit('join', { profile_id: String(profileId) });
+      } else {
+        s.connect();
+      }
+    } catch {}
+  }, [profileId]);
 
   // Keep live refs for async handlers (socket callbacks)
   useEffect(() => { isGeneratingRef.current = isGenerating; }, [isGenerating]);

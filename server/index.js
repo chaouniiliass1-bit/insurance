@@ -46,6 +46,18 @@ let CURRENT_PUBLIC_URL = null;
 let ENSURING_TUNNEL = false;
 let RESTARTING = false;
 
+function normalizeExternalUrl(input) {
+  if (typeof input !== 'string') return null;
+  let s = input.trim();
+  if (!s) return null;
+  s = s.replace(/^[`"'“”]+/, '').replace(/[`"'“”]+$/, '').trim();
+  if (s.startsWith('//')) s = `https:${s}`;
+  if (s.includes('removeai.ai') && !s.startsWith('http://') && !s.startsWith('https://')) {
+    s = `https://${s.replace(/^\/+/, '')}`;
+  }
+  return s;
+}
+
 function normalizeOrigin(input) {
   if (!input || typeof input !== 'string') return null;
   const raw = input.trim();
@@ -162,7 +174,7 @@ async function upsertTracksForProfile(profile_id, urls, download_url, title, cov
         profile_id: pid,
         audio_url: u,
         stream_url: u,
-        mp3_url: typeof download_url === 'string' && download_url.startsWith('http') ? download_url : u,
+        mp3_url: typeof download_url === 'string' && download_url.startsWith('http') ? download_url : null,
         title: titles[i] || baseTitle,
         image_url: typeof cover === 'string' ? cover : null,
       };
@@ -243,24 +255,16 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
         const downloadCandidates = [];
         const metaCandidates = [];
         const add = (v) => {
-          if (typeof v !== 'string') return;
-          let s = v.trim();
+          const s = normalizeExternalUrl(v);
           if (!s) return;
-          if (s.startsWith('//')) s = `https:${s}`;
-          if (s.includes('removeai.ai') && !s.startsWith('http://') && !s.startsWith('https://')) {
-            s = `https://${s.replace(/^\/+/, '')}`;
-          }
           if (s.includes('musicfile.removeai.ai')) candidates.unshift(s);
           else candidates.push(s);
         };
         const addDownload = (v) => {
-          if (typeof v !== 'string') return;
-          let s = v.trim();
-          if (!s) return;
-          if (s.startsWith('//')) s = `https:${s}`;
-          if (!s.startsWith('http://') && !s.startsWith('https://')) return;
+          const s = normalizeExternalUrl(v);
+          if (!s || (!s.startsWith('http://') && !s.startsWith('https://'))) return;
           const low = s.toLowerCase();
-          if (low.includes('aiquickdraw.com') || low.endsWith('.mp3')) downloadCandidates.push(s);
+          if (low.includes('aiquickdraw.com') || low.endsWith('.mp3') || low.includes('cdn1.suno.ai')) downloadCandidates.push(s);
         };
         const listA = Array.isArray(response?.data) ? response.data : [];
         const listB = Array.isArray(response?.sunoData) ? response.sunoData : [];
@@ -281,6 +285,10 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
           add(it?.proxy_url);
           add(it?.proxyUrl);
           add(it?.url);
+          addDownload(it?.audio_url);
+          addDownload(it?.audioUrl);
+          addDownload(it?.source_audio_url);
+          addDownload(it?.sourceAudioUrl);
           addDownload(it?.download_url);
           addDownload(it?.downloadUrl);
           addDownload(it?.mp3_url);
@@ -369,16 +377,7 @@ async function pollSunoTaskSafetyNet(taskId, profile_id) {
       const maxAttempts = 150;
       const intervalMs = 2000;
 
-      const normalizeCandidate = (v) => {
-        if (typeof v !== 'string') return null;
-        let s = v.trim();
-        if (!s) return null;
-        if (s.startsWith('//')) s = `https:${s}`;
-        if (s.includes('removeai.ai') && !s.startsWith('http://') && !s.startsWith('https://')) {
-          s = `https://${s.replace(/^\/+/, '')}`;
-        }
-        return s;
-      };
+      const normalizeCandidate = (v) => normalizeExternalUrl(v);
 
       for (;;) {
         const state = pollingByTaskId.get(tid);
@@ -419,7 +418,8 @@ async function pollSunoTaskSafetyNet(taskId, profile_id) {
         const add = (v) => {
           const s = normalizeCandidate(v);
           if (!s) return;
-          if (s.includes('removeai.ai')) candidates.unshift(s);
+          if (s.includes('musicfile.removeai.ai')) candidates.unshift(s);
+          else if (s.includes('removeai.ai')) candidates.unshift(s);
           else candidates.push(s);
         };
         const addDownload = (v) => {
@@ -710,6 +710,7 @@ try {
 const siphonInFlight = new Set();
 let bucketEnsured = false;
 async function siphonToSupabaseStorage({ taskId, streamUrl, downloadUrl, trackKey, desiredTitle }) {
+  if (String(process.env.ENABLE_SIPHON || '').trim() !== '1') return null;
   const key = `${downloadUrl}::${trackKey || ''}`;
   if (siphonInFlight.has(key)) return null;
   siphonInFlight.add(key);
@@ -1277,6 +1278,9 @@ app.post('/proxy/suno/generate', async (req, res) => {
       const raw = String(url || '')
         .trim()
         .replace(/\)+$/, '')
+        .replace(/^[`"'“”]+/, '')
+        .replace(/[`"'“”]+$/, '')
+        .trim()
         .replace(/\/+$/, '');
       if (!raw) return '';
       if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
@@ -1300,6 +1304,9 @@ app.post('/proxy/suno/generate', async (req, res) => {
       String(url || '')
         .trim()
         .replace(/\)+$/, '')
+        .replace(/^[`"'“”]+/, '')
+        .replace(/[`"'“”]+$/, '')
+        .trim()
         .replace(/\/+$/, '');
     const bodyCb = sanitizeCb(req.body?.callback_url || req.body?.callbackUrl || req.body?.callBackUrl || '');
     const envCb = sanitizeCb(computedEnvCallback);
@@ -1598,16 +1605,7 @@ async function handleSunoCallback(req, res) {
     const siphonJobs = [];
     let cover = null;
     let title = null;
-    const normalizeCandidate = (v) => {
-      if (typeof v !== 'string') return null;
-      let s = v.trim();
-      if (!s) return null;
-      if (s.startsWith('//')) s = `https:${s}`;
-      if (s.includes('removeai.ai') && !s.startsWith('http://') && !s.startsWith('https://')) {
-        s = `https://${s.replace(/^\/+/, '')}`;
-      }
-      return s;
-    };
+    const normalizeCandidate = (v) => normalizeExternalUrl(v);
     for (const it of items) {
       const rawCand =
         it?.stream_audio_url ||
@@ -1840,36 +1838,26 @@ async function handleSunoCallback(req, res) {
 
       console.log('[Server] Emitting suno:track (broadcast)', { task_id, callbackType, url: finalUrl });
       const baseTitle = typeof title === 'string' && title.trim().length ? title.trim() : 'New Track';
-      const titles = urls.length >= 2 ? [baseTitle, `${baseTitle} 2`] : [baseTitle];
       const primaryStream = finalUrl;
       const primaryDownload = (() => {
-        const dl = String(siphonJobs?.[0]?.downloadUrl || '').trim();
-        if (!dl || !dl.startsWith('http')) return null;
-        const low = dl.toLowerCase();
-        if (low.includes('aiquickdraw.com') || low.endsWith('.mp3')) return dl;
+        for (const it of Array.isArray(items) ? items : []) {
+          const cand =
+            normalizeExternalUrl(it?.audio_url) ||
+            normalizeExternalUrl(it?.source_audio_url) ||
+            normalizeExternalUrl(it?.download_url) ||
+            normalizeExternalUrl(it?.downloadUrl) ||
+            normalizeExternalUrl(it?.mp3_url) ||
+            normalizeExternalUrl(it?.mp3Url) ||
+            null;
+          if (!cand || !cand.startsWith('http')) continue;
+          const low = cand.toLowerCase();
+          if (low.includes('aiquickdraw.com') || low.endsWith('.mp3') || low.includes('cdn1.suno.ai')) return cand;
+        }
         return null;
       })();
       if (profile_id) {
         try {
-          for (let i = 0; i < Math.min(2, urls.length); i++) {
-            const u = urls[i];
-            if (typeof u !== 'string' || !u.startsWith('http')) continue;
-            const row = {
-              profile_id,
-              audio_url: u,
-              stream_url: u,
-              mp3_url: primaryDownload || u,
-              title: titles[i] || baseTitle,
-              image_url: typeof cover === 'string' ? cover : null,
-            };
-            const existing = await supabaseAdmin.from('tracks').select('id').eq('profile_id', profile_id).eq('audio_url', u).limit(1);
-            const id = Array.isArray(existing?.data) && existing.data[0]?.id ? existing.data[0].id : null;
-            if (id) {
-              await supabaseAdmin.from('tracks').update(row).eq('id', id);
-            } else {
-              await supabaseAdmin.from('tracks').insert(row);
-            }
-          }
+          await upsertTracksForProfile(profile_id, [primaryStream], primaryDownload, baseTitle, typeof cover === 'string' ? cover : null, task_id ? String(task_id) : null, 'callback');
         } catch (e) {
           console.warn('[Server] tracks upsert from callback failed', e?.message || e);
         }
@@ -1877,21 +1865,10 @@ async function handleSunoCallback(req, res) {
       if (profile_id) {
         try { io.to(profile_id).emit('suno:status', { task_id: task_id ? String(task_id) : null, status: 'success', message: 'Ready' }); } catch {}
       }
-      const payload = { url: primaryStream, audio_url: primaryStream, stream_url: primaryStream, download_url: primaryDownload, urls, cover, title: baseTitle, titles, task_id, callbackType, items };
+      console.log('[Server] Extracted URLs', { task_id: task_id ? String(task_id) : null, callbackType, stream_url: primaryStream, mp3_url: primaryDownload });
+      const payload = { url: primaryStream, audio_url: primaryStream, stream_url: primaryStream, download_url: primaryDownload, urls: [primaryStream], cover, title: baseTitle, titles: [baseTitle], task_id, callbackType, items };
       if (profile_id) io.to(profile_id).emit('suno:track', payload);
       else io.emit('suno:track', payload);
-      for (let i = 0; i < Math.min(2, siphonJobs.length); i++) {
-        const job = siphonJobs[i];
-        const suffix = i === 1 ? '_2' : '';
-        const baseKey = job.trackKey || String(task_id || 'task');
-        void siphonToSupabaseStorage({
-          taskId: task_id ? String(task_id) : 'unknown',
-          streamUrl: job.streamUrl,
-          downloadUrl: job.downloadUrl,
-          trackKey: `${baseKey}${suffix}`,
-          desiredTitle: titles[i] || baseTitle,
-        });
-      }
       return res.status(200).json({ status: 'ok' });
     }
 

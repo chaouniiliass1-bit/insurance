@@ -514,6 +514,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           const secondOk = normalizePlayableUrl(second);
           if (!firstOk) {
             console.log('[Client] Ignored non-APIBox/Suno track URL');
+            setStatusLabel('Track ready but unable to play this link.');
+            setIsGenerating(false);
+            setIsRequesting(false);
+            setIsPreloading(false);
+            setHasStartedPlayback(false);
             return;
           }
 

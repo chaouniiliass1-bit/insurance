@@ -224,12 +224,18 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
         }
         const startedAtMs = taskStartedAtMsById.get(tid) || state.startedAt || Date.now();
         const elapsedMs = Date.now() - startedAtMs;
-        const intervalMs = elapsedMs < 30_000 ? 800 : 2000;
-        const recordUrl = `${API_BASE}/generate/record-info?taskId=${encodeURIComponent(tid)}`;
+        const intervalMs = elapsedMs < 10_000 ? 500 : elapsedMs < 30_000 ? 800 : 1500;
+        const recordUrl = `${API_BASE}/generate/record-info?taskId=${encodeURIComponent(tid)}&_ts=${Date.now()}`;
         let recordResp = null;
         try {
           recordResp = await axios.get(recordUrl, {
-            headers: { Authorization: authHeader, Accept: 'application/json, text/plain, */*', 'User-Agent': 'Mozilla/5.0' },
+            headers: {
+              Authorization: authHeader,
+              Accept: 'application/json, text/plain, */*',
+              'User-Agent': 'Mozilla/5.0',
+              'Cache-Control': 'no-cache',
+              Pragma: 'no-cache',
+            },
             httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
             timeout: 20_000,
           });
@@ -318,10 +324,24 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
           return null;
         })();
         const baseTitle = pickedTitle || 'New Track';
+        const trackItemsForIndex = (() => {
+          try {
+            const hasTrackShape = (it) =>
+              !!it &&
+              (typeof it.stream_audio_url === 'string' ||
+                typeof it.source_stream_audio_url === 'string' ||
+                typeof it.audio_url === 'string' ||
+                typeof it.url === 'string');
+            if (Array.isArray(listA) && listA.some(hasTrackShape)) return listA;
+            if (Array.isArray(listB) && listB.some(hasTrackShape)) return listB;
+            if (Array.isArray(allItems) && allItems.some(hasTrackShape)) return allItems;
+          } catch {}
+          return metaCandidates;
+        })();
         const streamByIndex = [];
         const mp3ByIndex = [];
-        for (let i = 0; i < Math.min(2, metaCandidates.length); i++) {
-          const it = metaCandidates[i] || {};
+        for (let i = 0; i < Math.min(2, trackItemsForIndex.length); i++) {
+          const it = trackItemsForIndex[i] || {};
           const stream =
             normalizeExternalUrl(it?.stream_audio_url) ||
             normalizeExternalUrl(it?.streamAudioUrl) ||

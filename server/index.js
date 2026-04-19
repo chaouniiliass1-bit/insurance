@@ -333,6 +333,134 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
   }, 1000);
 }
 
+async function pollSunoTaskSafetyNet(taskId, profile_id) {
+  const tid = String(taskId || '').trim();
+  if (!tid) return;
+  if (processed.has(tid)) return;
+  const existing = pollingByTaskId.get(tid);
+  if (existing?.safetyNetStarted) return;
+  if (existing) existing.safetyNetStarted = true;
+  else pollingByTaskId.set(tid, { startedAt: Date.now(), attempts: 0, profile_id: profile_id || null, safetyNetStarted: true });
+
+  setTimeout(async () => {
+    try {
+      const API_KEY = String(process.env.SUNO_API_KEY || process.env.EXPO_PUBLIC_SUNO_API_KEY || '').trim();
+      const API_BASE = String(process.env.SUNO_API_URL || process.env.EXPO_PUBLIC_SUNO_BASE || 'https://api.api.box/api/v1').trim().replace(/\/+$/, '');
+      const authHeader = API_KEY.toLowerCase().startsWith('bearer ') ? API_KEY : `Bearer ${API_KEY}`;
+      const maxAttempts = 20;
+      const intervalMs = 3000;
+
+      const normalizeCandidate = (v) => {
+        if (typeof v !== 'string') return null;
+        let s = v.trim();
+        if (!s) return null;
+        if (s.startsWith('//')) s = `https:${s}`;
+        if (s.includes('removeai.ai') && !s.startsWith('http://') && !s.startsWith('https://')) {
+          s = `https://${s.replace(/^\/+/, '')}`;
+        }
+        return s;
+      };
+
+      for (;;) {
+        const state = pollingByTaskId.get(tid);
+        if (!state) return;
+        if (processed.has(tid)) return;
+        const room = state?.profile_id ? String(state.profile_id) : null;
+        state.attempts = (state.attempts || 0) + 1;
+        const attempt = state.attempts;
+        if (attempt > maxAttempts) {
+          console.warn('[Server] SafetyNet poll timeout', { taskId: tid, attempts: attempt });
+          return;
+        }
+
+        const recordUrl = `${API_BASE}/generate/record-info?taskId=${encodeURIComponent(tid)}`;
+        let recordResp = null;
+        try {
+          recordResp = await axios.get(recordUrl, {
+            headers: { Authorization: authHeader, Accept: 'application/json, text/plain, */*', 'User-Agent': 'Mozilla/5.0' },
+            httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
+            timeout: 20_000,
+          });
+        } catch (e) {
+          const st = e?.response?.status || 0;
+          const dat = e?.response?.data || null;
+          console.warn('[Server] SafetyNet poll error', { taskId: tid, attempt, status: st, data: dat && typeof dat === 'object' ? { code: dat.code, msg: dat.msg } : dat });
+          await new Promise((r) => setTimeout(r, intervalMs));
+          continue;
+        }
+
+        const payload = recordResp?.data || {};
+        const d = payload?.data || {};
+        const status = d?.status || d?.state || d?.task_status || null;
+        const response = d?.response || {};
+
+        const candidates = [];
+        const metaCandidates = [];
+        const add = (v) => {
+          const s = normalizeCandidate(v);
+          if (!s) return;
+          if (s.includes('removeai.ai')) candidates.unshift(s);
+          else candidates.push(s);
+        };
+
+        const listA = Array.isArray(response?.data) ? response.data : [];
+        const listB = Array.isArray(response?.sunoData) ? response.sunoData : [];
+        for (const it of [...listA, ...listB]) {
+          metaCandidates.push(it);
+          add(it?.audio_url);
+          add(it?.stream_audio_url);
+          add(it?.source_stream_audio_url);
+          add(it?.url);
+          add(it?.audioUrl);
+          add(it?.streamAudioUrl);
+          add(it?.sourceStreamAudioUrl);
+          add(it?.sourceAudioUrl);
+          add(it?.cdn_url);
+          add(it?.cdnUrl);
+          add(it?.music_url);
+          add(it?.musicUrl);
+          add(it?.proxy_url);
+          add(it?.proxyUrl);
+        }
+
+        const urls = [];
+        for (const cand of candidates) {
+          try {
+            const u = new URL(cand);
+            const host = u.hostname.toLowerCase();
+            const isHttps = u.protocol === 'https:';
+            const isHttp = u.protocol === 'http:';
+            const isLocal = host.includes('localhost') || host === '127.0.0.1';
+            if (((IS_DEV && (isHttps || isHttp)) || (!IS_DEV && isHttps)) && !isLocal && isAllowedSunoHost(host)) {
+              if (!urls.includes(cand)) urls.push(cand);
+            }
+          } catch {}
+          if (urls.length >= 2) break;
+        }
+
+        const elapsedMs = Date.now() - (taskStartedAtMsById.get(tid) || Date.now());
+        console.log('[Server] SafetyNet poll record-info', { taskId: tid, attempt, status, urls_len: urls.length, elapsedMs });
+        if (urls.length) {
+          try {
+            await upsertTracksForProfile(room || profile_id || null, urls, null, null, tid, 'safetynet');
+          } catch {}
+          const out = { url: urls[0], audio_url: urls[0], urls, cover: null, title: 'New Track', task_id: tid, callbackType: 'safetynet', items: metaCandidates.slice(0, 2) };
+          if (room) io.to(room).emit('suno:track', out);
+          else io.emit('suno:track', out);
+          return;
+        }
+
+        if (room) {
+          try { io.to(room).emit('suno:status', { task_id: tid, status: String(status || ''), message: 'Still Cooking…' }); } catch {}
+        }
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
+    } catch (e) {
+      console.warn('[Server] SafetyNet poll crashed', e?.message || e);
+    }
+  }, 500);
+}
+
 io.on('connection', (socket) => {
   try {
     const authPid = socket?.handshake?.auth?.profile_id ?? socket?.handshake?.auth?.profileId;
@@ -1387,8 +1515,18 @@ async function handleSunoCallback(req, res) {
     const siphonJobs = [];
     let cover = null;
     let title = null;
+    const normalizeCandidate = (v) => {
+      if (typeof v !== 'string') return null;
+      let s = v.trim();
+      if (!s) return null;
+      if (s.startsWith('//')) s = `https:${s}`;
+      if (s.includes('removeai.ai') && !s.startsWith('http://') && !s.startsWith('https://')) {
+        s = `https://${s.replace(/^\/+/, '')}`;
+      }
+      return s;
+    };
     for (const it of items) {
-      const cand =
+      const rawCand =
         it?.audio_url ||
         it?.stream_audio_url ||
         it?.source_stream_audio_url ||
@@ -1408,7 +1546,8 @@ async function handleSunoCallback(req, res) {
         it?.url ||
         it?.audio ||
         null;
-      if (typeof cand === 'string') {
+      const cand = normalizeCandidate(rawCand);
+      if (cand) {
         try {
           const u = new URL(cand);
           const host = u.hostname.toLowerCase();
@@ -1416,7 +1555,8 @@ async function handleSunoCallback(req, res) {
           const isHttp = u.protocol === 'http:';
           const isLocal = host.includes('localhost') || host === '127.0.0.1';
           if (((IS_DEV && (isHttps || isHttp)) || (!IS_DEV && isHttps)) && !isLocal && isAllowedSunoHost(host)) {
-            urls.push(cand);
+            if (cand.includes('removeai.ai')) urls.unshift(cand);
+            else urls.push(cand);
           } else {
             console.log('[Server] Ignored non-Suno audio host', host);
           }
@@ -1526,6 +1666,35 @@ async function handleSunoCallback(req, res) {
 
     // Validate we have at least one good audio URL
     const isValidAudio = Array.isArray(urls) && urls.length > 0;
+    const statusSignal =
+      data?.status ||
+      data?.state ||
+      data?.task_status ||
+      body?.status ||
+      body?.state ||
+      null;
+    const statusUpper = String(statusSignal || '').toUpperCase();
+    const isCompleteSignal =
+      callbackType === 'complete' ||
+      statusUpper === 'SUCCESS' ||
+      statusUpper.endsWith('_SUCCESS') ||
+      statusUpper.includes('COMPLETE');
+
+    if (Number(code) === 200 && isCompleteSignal && !isValidAudio && Array.isArray(items) && items.length) {
+      try { console.log('COMPLETE DATA DUMP:', JSON.stringify(items[0])); } catch {}
+      try {
+        const it = items[0] || {};
+        const direct =
+          normalizeCandidate(it?.audio_url) ||
+          normalizeCandidate(it?.stream_audio_url) ||
+          normalizeCandidate(it?.source_stream_audio_url) ||
+          normalizeCandidate(it?.url) ||
+          null;
+        if (direct && direct.startsWith('http')) {
+          urls.push(direct);
+        }
+      } catch {}
+    }
 
     // Error handling
     if (code && [400, 401, 429, 500].includes(Number(code))) {
@@ -1618,6 +1787,9 @@ async function handleSunoCallback(req, res) {
           if (!taskStartedAtMsById.has(tid)) taskStartedAtMsById.set(tid, Date.now());
         } catch {}
         try { await pollSunoTaskFromEnv(String(task_id), profile_id || null); } catch {}
+        if (isCompleteSignal) {
+          try { await pollSunoTaskSafetyNet(String(task_id), profile_id || null); } catch {}
+        }
       }
       if (profile_id) {
         try {

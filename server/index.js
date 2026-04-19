@@ -207,8 +207,7 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
       const API_KEY = String(process.env.SUNO_API_KEY || process.env.EXPO_PUBLIC_SUNO_API_KEY || '').trim();
       const API_BASE = String(process.env.SUNO_API_URL || process.env.EXPO_PUBLIC_SUNO_BASE || 'https://api.api.box/api/v1').trim().replace(/\/+$/, '');
       const authHeader = API_KEY.toLowerCase().startsWith('bearer ') ? API_KEY : `Bearer ${API_KEY}`;
-      const maxAttempts = 36;
-      const intervalMs = 5000;
+      const maxAttempts = 240;
       for (;;) {
         const state = pollingByTaskId.get(tid);
         if (!state) return;
@@ -224,6 +223,9 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
           pollingByTaskId.delete(tid);
           return;
         }
+        const startedAtMs = taskStartedAtMsById.get(tid) || state.startedAt || Date.now();
+        const elapsedMs = Date.now() - startedAtMs;
+        const intervalMs = elapsedMs < 30_000 ? 800 : 2000;
         const recordUrl = `${API_BASE}/generate/record-info?taskId=${encodeURIComponent(tid)}`;
         let recordResp = null;
         try {
@@ -264,9 +266,18 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
           const low = s.toLowerCase();
           if (low.includes('aiquickdraw.com') || low.endsWith('.mp3') || low.includes('cdn1.suno.ai')) downloadCandidates.push(s);
         };
-        const listA = Array.isArray(response?.data) ? response.data : [];
+        const listA = Array.isArray(response) ? response : Array.isArray(response?.data) ? response.data : [];
         const listB = Array.isArray(response?.sunoData) ? response.sunoData : [];
-        for (const it of [...listA, ...listB]) {
+        const listC = Array.isArray(d?.data) ? d.data : [];
+        const listD = Array.isArray(payload?.data) ? payload.data : [];
+        const allItems = [...listA, ...listB, ...listC, ...listD].filter(Boolean);
+        add(d?.stream_audio_url);
+        add(d?.source_stream_audio_url);
+        add(d?.audio_url);
+        add(d?.url);
+        add(payload?.stream_audio_url);
+        add(payload?.audio_url);
+        for (const it of allItems) {
           metaCandidates.push(it);
           add(it?.stream_audio_url);
           add(it?.streamAudioUrl);
@@ -308,7 +319,6 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
           } catch {}
           if (urls.length >= 2) break;
         }
-        const elapsedMs = Date.now() - (taskStartedAtMsById.get(tid) || Date.now());
         console.log('[Server] Poll record-info', { taskId: tid, attempt, status: statusStr || status, urls_len: urls.length, elapsedMs });
 
         if (statusStr !== 'SUCCESS') {
@@ -332,7 +342,7 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
             const prevSig = lastSigByTask.get(tid) || null;
             lastSigByTask.set(tid, sig);
             if (!prevSig || prevSig !== sig) {
-              console.log('EARLY CATCH: Found stream URL before completion:', primaryStream);
+              console.log('EARLY CATCH: Found stream URL before completion:', { url: primaryStream, elapsedMs });
               const out = { url: primaryStream, audio_url: primaryStream, stream_url: primaryStream, download_url: primaryDownload, urls: playUrls.length ? playUrls.slice(0, 2) : [primaryStream], cover: pickedCover, title: pickedTitle || 'New Track', task_id: tid, callbackType: 'poll_early', items: metaCandidates.slice(0, 2) };
               if (room) {
                 try { io.to(room).emit('suno:status', { task_id: tid, status: 'success', message: 'Ready' }); } catch {}
@@ -392,7 +402,7 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
       console.warn('[Server] Poll worker crashed', e?.message || e);
       pollingByTaskId.delete(tid);
     }
-  }, 1000);
+  }, 0);
 }
 
 async function pollSunoTaskSafetyNet(taskId, profile_id) {

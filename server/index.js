@@ -966,6 +966,19 @@ app.post('/proxy/suno/generate', async (req, res) => {
     let CALLBACK_URL = isValidCb(activeTunnelCb) ? activeTunnelCb : (isValidCb(envCb) ? envCb : (isValidCb(bodyCb) ? bodyCb : ''));
     let callbackSource = isValidCb(activeTunnelCb) ? 'tunnel' : (isValidCb(envCb) ? 'env' : (isValidCb(bodyCb) ? 'client' : 'none'));
 
+    if (!CALLBACK_URL && railwayBase) {
+      CALLBACK_URL = `${railwayBase}/suno-callback`;
+      callbackSource = 'railway';
+    }
+    if (CALLBACK_URL && !CALLBACK_URL.startsWith('http://') && !CALLBACK_URL.startsWith('https://')) {
+      CALLBACK_URL = `https://${CALLBACK_URL.replace(/^\/+/, '')}`;
+      callbackSource += '_fixed_proto';
+    }
+    if (!IS_DEV && CALLBACK_URL && CALLBACK_URL.startsWith('http://')) {
+      CALLBACK_URL = `https://${CALLBACK_URL.slice('http://'.length)}`;
+      callbackSource += '_fixed_https';
+    }
+
     // FIX: Box AI / API Box specific callback requirement
     // If the URL contains 'serveousercontent.com', ensure it is HTTPS
     if (CALLBACK_URL.includes('serveousercontent.com') && CALLBACK_URL.startsWith('http:')) {
@@ -999,7 +1012,7 @@ app.post('/proxy/suno/generate', async (req, res) => {
     }
     const tags = Array.isArray(req.body?.tags) ? req.body.tags : [];
     // Send JSON payload — some providers strictly require JSON body
-    const body = {
+    const payload = {
       prompt,
       tags,
       customMode: false,
@@ -1009,6 +1022,7 @@ app.post('/proxy/suno/generate', async (req, res) => {
       callback_url: CALLBACK_URL,
       callbackUrl: CALLBACK_URL,
       callBackUrl: CALLBACK_URL,
+      envCallback: CALLBACK_URL,
     };
 
     if (DRY_RUN) {
@@ -1016,7 +1030,8 @@ app.post('/proxy/suno/generate', async (req, res) => {
     }
 
     const url = `${API_BASE}/generate`;
-    console.log('[Server] Forwarding Suno generate', { url, prompt, tags, customMode: body.customMode, instrumental: body.instrumental, callback: CALLBACK_URL, callbackSource });
+    console.log('[Server] Forwarding Suno generate', { url, prompt, tags, customMode: payload.customMode, instrumental: payload.instrumental, callback: CALLBACK_URL, callbackSource });
+    try { console.log('Sending Payload to Suno:', JSON.stringify(payload)); } catch {}
     
     const authCandidates = (() => {
       const k = String(API_KEY || '').trim();
@@ -1031,7 +1046,7 @@ app.post('/proxy/suno/generate', async (req, res) => {
       try {
         authHeaderUsed = authHeader;
         console.log('[Server] Using Auth mode:', authHeader.toLowerCase().startsWith('bearer ') ? 'bearer' : 'raw');
-        resp = await axios.post(url, body, {
+        resp = await axios.post(url, payload, {
           headers: {
             Authorization: authHeader,
             'Content-Type': 'application/json',

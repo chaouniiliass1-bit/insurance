@@ -548,7 +548,7 @@ io.on('connection', (socket) => {
   } catch {}
   socket.on('join', (payload) => {
     try {
-      const pid = String(payload?.profile_id || payload?.profileId || '').trim();
+      const pid = typeof payload === 'string' ? payload.trim() : String(payload?.profile_id || payload?.profileId || '').trim();
       if (pid) {
         socket.join(pid);
         console.log('[Server] Socket joined room (event)', { socketId: socket.id, profile_id: pid });

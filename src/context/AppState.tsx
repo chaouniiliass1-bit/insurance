@@ -478,6 +478,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           const pid = profileIdRef.current;
           if (pid) {
             client.emit('join', { profile_id: pid });
+            client.emit('join', String(pid));
+            console.log('CLIENT: Joined room', pid);
           }
         } catch {}
       });
@@ -523,6 +525,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       });
       client.on('suno:track', async (evt: any) => {
         console.log('[Client] suno:track RECEIVED', { task_id: evt?.task_id, callbackType: evt?.callbackType });
+        setIsGenerating(false);
+        setIsRequesting(false);
+        setIsPreloading(false);
+        setStatusLabel('');
         try {
           const urls: string[] = Array.isArray(evt?.urls) ? evt.urls : [];
           const cbType: string | null = typeof evt?.callbackType === 'string' ? evt.callbackType : null;
@@ -537,12 +543,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           if (!firstOk) {
             console.log('[Client] Ignored non-APIBox/Suno track URL');
             setStatusLabel('Track ready but unable to play this link.');
-            setIsGenerating(false);
-            setIsRequesting(false);
-            setIsPreloading(false);
             setHasStartedPlayback(false);
             return;
           }
+          console.log('CLIENT: Playing from source:', firstOk);
 
           const items: any[] = Array.isArray(evt?.items)
             ? evt.items
@@ -679,10 +683,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           }
 
           // Reset generation state immediately to unlock UI
-          setIsGenerating(false);
-          setIsRequesting(false);
-          setIsPreloading(false);
-          setStatusLabel('');
           currentTaskIdRef.current = null;
 
           // Persistence

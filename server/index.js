@@ -319,7 +319,7 @@ try {
   const hasSuno = !!String(process.env.SUNO_API_KEY || process.env.EXPO_PUBLIC_SUNO_API_KEY || '').trim();
   console.log('[Server] SUNO_API_KEY', hasSuno ? 'Key exists' : 'Key MISSING');
 } catch {}
-const VIBES_BUCKET = 'vibes-storage';
+const VIBES_BUCKET = 'tracks';
 const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
 });
@@ -391,7 +391,7 @@ async function siphonToSupabaseStorage({ taskId, streamUrl, downloadUrl, trackKe
     if (up?.error) throw up.error;
 
     const { data } = supabaseAdmin.storage.from(VIBES_BUCKET).getPublicUrl(filePath);
-    const publicUrl = data?.publicUrl || `${SUPABASE_URL.replace(/\/$/, '')}/storage/v1/object/public/${VIBES_BUCKET}/${encodeURIComponent(filePath)}`;
+    const publicUrl = data?.publicUrl || `${SUPABASE_URL.replace(/\/$/, '')}/storage/v1/object/public/${VIBES_BUCKET}/${filePath}`;
 
     const updateRow = async () => {
       // Prefer matching by mp3_url (download_url) because client always writes mp3_url.
@@ -921,6 +921,16 @@ app.post('/proxy/suno/generate', async (req, res) => {
     const DRY_RUN = String(process.env.SUNO_DRY_RUN || '').trim() === '1';
     const FALLBACK_ON_ERROR = String(process.env.SUNO_FALLBACK_ON_ERROR || '').trim() === '1';
     const missingKey = API_KEY.includes('your-suno-api-key') || !API_KEY;
+    const sanitizeBase = (url) => {
+      const raw = String(url || '').trim().replace(/\/+$/, '');
+      if (!raw) return '';
+      if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
+      return `https://${raw}`;
+    };
+    const railwayBase = sanitizeBase(process.env.RAILWAY_STATIC_URL || process.env.APP_URL || '');
+    const computedEnvCallback =
+      String(process.env.EXPO_PUBLIC_SUNO_CALLBACK_URL || '').trim() ||
+      (railwayBase ? `${railwayBase}/suno-callback` : '');
     try {
       console.log('[Server] Suno env snapshot', {
         hasSunoKey: !missingKey,
@@ -928,12 +938,12 @@ app.post('/proxy/suno/generate', async (req, res) => {
         isDev: IS_DEV,
         dryRun: DRY_RUN,
         fallbackOnError: FALLBACK_ON_ERROR,
-        envCallback: String(process.env.EXPO_PUBLIC_SUNO_CALLBACK_URL || '').trim(),
+        envCallback: computedEnvCallback,
       });
     } catch {}
     const sanitizeCb = (url) => String(url || '').trim().replace(/\/+$/, '');
     const bodyCb = sanitizeCb(req.body?.callback_url || req.body?.callbackUrl || req.body?.callBackUrl || '');
-    const envCb = sanitizeCb(process.env.EXPO_PUBLIC_SUNO_CALLBACK_URL || '');
+    const envCb = sanitizeCb(computedEnvCallback);
     // Use CURRENT_PUBLIC_URL if available (most reliable), then env, then client
     const activeTunnelCb = CURRENT_PUBLIC_URL ? `${CURRENT_PUBLIC_URL}/suno-callback` : '';
     
@@ -1045,8 +1055,21 @@ app.post('/proxy/suno/generate', async (req, res) => {
     }
 
     console.log('[Server] Suno API Response:', { status: resp.status, data: resp.data });
+    try {
+      console.log('Full Suno Response:', JSON.stringify(resp.data));
+    } catch {}
 
-    const taskId = resp?.data?.data?.taskId || resp?.data?.taskId || null;
+    const taskId =
+      resp?.data?.data?.taskId ||
+      resp?.data?.data?.taskID ||
+      resp?.data?.data?.task_id ||
+      resp?.data?.data?.id ||
+      resp?.data?.data?.task?.id ||
+      resp?.data?.taskId ||
+      resp?.data?.taskID ||
+      resp?.data?.task_id ||
+      resp?.data?.id ||
+      null;
     if (taskId) {
       try {
         taskStartedAtMsById.set(String(taskId), Date.now());

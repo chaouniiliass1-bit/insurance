@@ -440,6 +440,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       client.off('disconnect'); // Remove old listeners if any
       client.off('suno:error');
       client.off('suno:track');
+      client.off('suno:status');
       client.off('connect');
       client.off('connect_error');
 
@@ -485,6 +486,13 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         setIsRequesting(false);
         setIsPreloading(false);
         setHasStartedPlayback(false);
+      });
+      client.on('suno:status', (evt: any) => {
+        try { console.log('[Client] suno:status', evt); } catch {}
+        const message = typeof evt?.message === 'string' ? evt.message : null;
+        if (isGeneratingRef.current && message) {
+          setStatusLabel(message);
+        }
       });
       client.on('suno:track', async (evt: any) => {
         console.log('[Client] suno:track RECEIVED', { task_id: evt?.task_id, callbackType: evt?.callbackType });

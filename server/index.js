@@ -144,6 +144,133 @@ const RECENT_CALLBACKS_MAX = 200;
 const pollingByTaskId = new Map();
 // No device mapping; broadcast-only callbacks
 
+async function pollSunoTaskFromEnv(taskId, profile_id) {
+  const tid = String(taskId || '').trim();
+  if (!tid) return;
+  if (processed.has(tid)) return;
+  const existing = pollingByTaskId.get(tid);
+  if (existing?.workerStarted) return;
+  if (existing) existing.workerStarted = true;
+  else pollingByTaskId.set(tid, { startedAt: Date.now(), attempts: 0, profile_id: profile_id || null, workerStarted: true });
+
+  setTimeout(async () => {
+    try {
+      const API_KEY = String(process.env.SUNO_API_KEY || process.env.EXPO_PUBLIC_SUNO_API_KEY || '').trim();
+      const API_BASE = String(process.env.EXPO_PUBLIC_SUNO_BASE || 'https://api.api.box/api/v1').trim().replace(/\/+$/, '');
+      const authHeader = API_KEY.toLowerCase().startsWith('bearer ') ? API_KEY : `Bearer ${API_KEY}`;
+      const maxAttempts = 36;
+      const intervalMs = 5000;
+      for (;;) {
+        const state = pollingByTaskId.get(tid);
+        if (!state) return;
+        if (processed.has(tid)) {
+          pollingByTaskId.delete(tid);
+          return;
+        }
+        const room = state?.profile_id ? String(state.profile_id) : null;
+        state.attempts += 1;
+        const attempt = state.attempts;
+        if (attempt > maxAttempts) {
+          console.warn('[Server] Poll timeout', { taskId: tid, attempts: attempt });
+          pollingByTaskId.delete(tid);
+          return;
+        }
+        const recordUrl = `${API_BASE}/generate/record-info?taskId=${encodeURIComponent(tid)}`;
+        let recordResp = null;
+        try {
+          recordResp = await axios.get(recordUrl, {
+            headers: { Authorization: authHeader },
+            httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
+            timeout: 20_000,
+          });
+        } catch (e) {
+          const st = e?.response?.status || 0;
+          const dat = e?.response?.data || null;
+          console.warn('[Server] Poll error', { taskId: tid, attempt, status: st, data: dat && typeof dat === 'object' ? { code: dat.code, msg: dat.msg } : dat });
+          await new Promise((r) => setTimeout(r, intervalMs));
+          continue;
+        }
+        const payload = recordResp?.data || {};
+        const d = payload?.data || {};
+        const status = d?.status || d?.state || d?.task_status || null;
+        const response = d?.response || {};
+        const candidates = [];
+        const metaCandidates = [];
+        const add = (v) => { if (typeof v === 'string' && v.length) candidates.push(v); };
+        const listA = Array.isArray(response?.data) ? response.data : [];
+        const listB = Array.isArray(response?.sunoData) ? response.sunoData : [];
+        for (const it of [...listA, ...listB]) {
+          metaCandidates.push(it);
+          add(it?.audio_url);
+          add(it?.audioUrl);
+          add(it?.stream_audio_url);
+          add(it?.streamAudioUrl);
+          add(it?.source_stream_audio_url);
+          add(it?.sourceStreamAudioUrl);
+          add(it?.source_audio_url);
+          add(it?.sourceAudioUrl);
+          add(it?.url);
+        }
+        const urls = [];
+        let pickedTitle = null;
+        let pickedCover = null;
+        for (const cand of candidates) {
+          try {
+            const u = new URL(cand);
+            const host = u.hostname.toLowerCase();
+            const isHttps = u.protocol === 'https:';
+            const isHttp = u.protocol === 'http:';
+            const isLocal = host.includes('localhost') || host === '127.0.0.1';
+            if (((IS_DEV && (isHttps || isHttp)) || (!IS_DEV && isHttps)) && !isLocal && isAllowedSunoHost(host)) {
+              if (!urls.includes(cand)) urls.push(cand);
+            }
+          } catch {}
+          if (urls.length >= 2) break;
+        }
+        const elapsedMs = Date.now() - (taskStartedAtMsById.get(tid) || Date.now());
+        console.log('[Server] Poll record-info', { taskId: tid, attempt, status, urls_len: urls.length, elapsedMs });
+        if (urls.length) {
+          try {
+            for (const it of metaCandidates) {
+              const u0 =
+                it?.audio_url ||
+                it?.audioUrl ||
+                it?.stream_audio_url ||
+                it?.streamAudioUrl ||
+                it?.source_stream_audio_url ||
+                it?.sourceStreamAudioUrl ||
+                it?.source_audio_url ||
+                it?.sourceAudioUrl ||
+                it?.url ||
+                null;
+              if (typeof u0 === 'string' && (u0 === urls[0] || u0 === urls[1])) {
+                pickedTitle = it?.title || it?.song_title || it?.name || pickedTitle;
+                pickedCover = it?.cover || it?.cover_url || it?.image || it?.image_url || it?.imageUrl || pickedCover;
+                break;
+              }
+            }
+          } catch {}
+          const sig = urls.join('|');
+          const prevSig = lastSigByTask.get(tid) || null;
+          lastSigByTask.set(tid, sig);
+          if (!prevSig || prevSig !== sig) {
+            console.log('[Server] Emitting suno:track (poll)', { taskId: tid, url: urls[0] });
+            const out = { url: urls[0], audio_url: urls[0], urls, cover: pickedCover, title: pickedTitle || 'New Track', task_id: tid, callbackType: 'poll', items: metaCandidates.slice(0, 2) };
+            if (room) io.to(room).emit('suno:track', out);
+            else io.emit('suno:track', out);
+          }
+          pollingByTaskId.delete(tid);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, intervalMs));
+      }
+    } catch (e) {
+      console.warn('[Server] Poll worker crashed', e?.message || e);
+      pollingByTaskId.delete(tid);
+    }
+  }, 1000);
+}
+
 io.on('connection', (socket) => {
   try {
     const authPid = socket?.handshake?.auth?.profile_id ?? socket?.handshake?.auth?.profileId;
@@ -1092,10 +1219,10 @@ app.post('/proxy/suno/generate', async (req, res) => {
       try {
         const tid = String(taskId);
         if (!pollingByTaskId.has(tid)) {
-          pollingByTaskId.set(tid, { startedAt: Date.now(), attempts: 0 });
+          pollingByTaskId.set(tid, { startedAt: Date.now(), attempts: 0, profile_id: requestedProfileId || null, workerStarted: true });
           setTimeout(async () => {
             try {
-              const maxAttempts = 60;
+              const maxAttempts = 36;
               const intervalMs = 5000;
               for (;;) {
                 const state = pollingByTaskId.get(tid);
@@ -1104,6 +1231,7 @@ app.post('/proxy/suno/generate', async (req, res) => {
                   pollingByTaskId.delete(tid);
                   return;
                 }
+                const profile_id = state?.profile_id ? String(state.profile_id) : null;
                 state.attempts += 1;
                 const attempt = state.attempts;
                 if (attempt > maxAttempts) {
@@ -1188,7 +1316,9 @@ app.post('/proxy/suno/generate', async (req, res) => {
                   lastSigByTask.set(tid, sig);
                   if (!prevSig || prevSig !== sig) {
                     console.log('[Server] Emitting suno:track (poll)', { taskId: tid, url: urls[0] });
-                    io.emit('suno:track', { url: urls[0], audio_url: urls[0], urls, cover: pickedCover, title: pickedTitle || 'New Track', task_id: tid, callbackType: 'poll', items: metaCandidates.slice(0, 2) });
+                    const payload = { url: urls[0], audio_url: urls[0], urls, cover: pickedCover, title: pickedTitle || 'New Track', task_id: tid, callbackType: 'poll', items: metaCandidates.slice(0, 2) };
+                    if (profile_id) io.to(profile_id).emit('suno:track', payload);
+                    else io.emit('suno:track', payload);
                   }
                   pollingByTaskId.delete(tid);
                   return;
@@ -1285,6 +1415,9 @@ async function handleSunoCallback(req, res) {
         it?.stream_audio_url ||
         it?.source_stream_audio_url ||
         it?.source_audio_url ||
+        it?.streamAudioUrl ||
+        it?.sourceStreamAudioUrl ||
+        it?.sourceAudioUrl ||
         it?.audioUrl ||
         it?.streamUrl ||
         it?.stream_url ||
@@ -1495,6 +1628,18 @@ async function handleSunoCallback(req, res) {
 
     if (Number(code) === 200 && !isValidAudio) {
       console.log('[Server] Callback received (no audio yet), waiting', { task_id, callbackType });
+      if (task_id) {
+        try {
+          const tid = String(task_id);
+          if (!taskStartedAtMsById.has(tid)) taskStartedAtMsById.set(tid, Date.now());
+        } catch {}
+        try { await pollSunoTaskFromEnv(String(task_id), profile_id || null); } catch {}
+      }
+      if (profile_id) {
+        try {
+          io.to(profile_id).emit('suno:status', { task_id: task_id ? String(task_id) : null, status: 'still_cooking', message: 'Still Cooking…', callbackType });
+        } catch {}
+      }
       return res.status(200).json({ status: 'ok' });
     }
 

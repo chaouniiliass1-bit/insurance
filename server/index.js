@@ -334,6 +334,7 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
               console.log('EARLY CATCH: Found stream URL before completion:', primaryStream);
               const out = { url: primaryStream, audio_url: primaryStream, stream_url: primaryStream, download_url: primaryDownload, urls: playUrls.length ? playUrls.slice(0, 2) : [primaryStream], cover: pickedCover, title: pickedTitle || 'New Track', task_id: tid, callbackType: 'poll_early', items: metaCandidates.slice(0, 2) };
               if (room) {
+                try { io.to(room).emit('suno:status', { task_id: tid, status: 'success', message: 'Ready' }); } catch {}
                 try { io.to(room).emit('suno:track', out); } catch {}
                 try { await upsertTracksForProfile(room, [primaryStream], primaryDownload, pickedTitle, pickedCover, tid, 'poll_early'); } catch {}
               } else {

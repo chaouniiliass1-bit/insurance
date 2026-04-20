@@ -52,6 +52,7 @@ function normalizeExternalUrl(input) {
   if (!s) return null;
   s = s.replace(/^[`"'“”]+/, '').replace(/[`"'“”]+$/, '').trim();
   s = s.replace(/[`"'“”]/g, '').trim();
+  s = s.replace(/[.)]+$/, '').trim();
   if (s.startsWith('//')) s = `https:${s}`;
   if (s.includes('removeai.ai') && !s.startsWith('http://') && !s.startsWith('https://')) {
     s = `https://${s.replace(/^\/+/, '')}`;
@@ -73,7 +74,8 @@ function extractUrlsAllKeys(root) {
     if (!s) return;
     if (!s.startsWith('http://') && !s.startsWith('https://')) return;
     const low = s.toLowerCase();
-    if (!(low.includes('removeai.ai') || low.includes('suno.ai'))) return;
+    const p = String(path || '').toLowerCase();
+    if (!(low.includes('removeai.ai') || low.includes('suno.ai') || p.includes('stream'))) return;
     if (results.some((r) => r.url === s)) return;
     const idxMatch = String(path || '').match(/\[(\d+)\]/);
     const index = idxMatch ? Number(idxMatch[1]) : null;
@@ -281,6 +283,7 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
         const startedAtMs = taskStartedAtMsById.get(tid) || state.startedAt || Date.now();
         const elapsedMs = Date.now() - startedAtMs;
         const intervalMs = elapsedMs < 10_000 ? 500 : elapsedMs < 30_000 ? 800 : 1500;
+        try { console.log('POLLING STATUS FOR:', tid, { attempt, elapsedMs, intervalMs }); } catch {}
         const recordUrl = `${API_BASE}/generate/record-info?taskId=${encodeURIComponent(tid)}&_ts=${Date.now()}`;
         let recordResp = null;
         try {
@@ -1419,7 +1422,6 @@ app.post('/proxy/suno/generate', async (req, res) => {
         .replace(/[`"'“”]+$/, '')
         .trim()
         .replace(/\/+$/, '');
-    const bodyCb = sanitizeCb(req.body?.callback_url || req.body?.callbackUrl || req.body?.callBackUrl || '');
     const envCb = sanitizeCb(computedEnvCallback);
     // Use CURRENT_PUBLIC_URL if available (most reliable), then env, then client
     const activeTunnelCb = CURRENT_PUBLIC_URL ? `${CURRENT_PUBLIC_URL}/suno-callback` : '';
@@ -1439,9 +1441,19 @@ app.post('/proxy/suno/generate', async (req, res) => {
         return false;
       }
     };
-    // Prefer active tunnel callback when valid; otherwise env or client
-    let CALLBACK_URL = isValidCb(activeTunnelCb) ? activeTunnelCb : (isValidCb(envCb) ? envCb : (isValidCb(bodyCb) ? bodyCb : ''));
-    let callbackSource = isValidCb(activeTunnelCb) ? 'tunnel' : (isValidCb(envCb) ? 'env' : (isValidCb(bodyCb) ? 'client' : 'none'));
+    const forcedRailwayCallback = normalizeExternalUrl('https://insurance-production-6074.up.railway.app/suno-callback');
+
+    // Hard override: never trust client callback_url in production (Serveo/ngrok/etc)
+    let CALLBACK_URL = '';
+    let callbackSource = 'forced';
+    if (!IS_DEV) {
+      CALLBACK_URL = forcedRailwayCallback || (railwayBase ? `${railwayBase}/suno-callback` : envCb);
+      callbackSource = forcedRailwayCallback ? 'forced_railway' : (railwayBase ? 'railway' : 'env');
+    } else {
+      // In dev keep flexibility
+      CALLBACK_URL = isValidCb(activeTunnelCb) ? activeTunnelCb : (isValidCb(envCb) ? envCb : '');
+      callbackSource = isValidCb(activeTunnelCb) ? 'tunnel' : (isValidCb(envCb) ? 'env' : 'none');
+    }
 
     if (!CALLBACK_URL && railwayBase) {
       CALLBACK_URL = `${railwayBase}/suno-callback`;

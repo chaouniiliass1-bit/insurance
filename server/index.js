@@ -1924,6 +1924,44 @@ async function handleSunoCallback(req, res) {
 
     // Required log format for clarity
     console.log(`[Server] Callback received { callbackType: '${callbackType}' }`, { code, task_id, url, urls_len: urls.length, elapsedMs });
+    if (Number(code) === 200 && (callbackType === 'text' || callbackType === 'first') && urls.length === 0 && Array.isArray(items) && items.length) {
+      try {
+        const pickStream = (it) =>
+          normalizeCandidate(it?.stream_audio_url) ||
+          normalizeCandidate(it?.streamAudioUrl) ||
+          normalizeCandidate(it?.source_stream_audio_url) ||
+          normalizeCandidate(it?.sourceStreamAudioUrl) ||
+          null;
+        const s0 = pickStream(items[0] || null);
+        const s1 = pickStream(items[1] || null);
+        const found = [];
+        for (const s of [s0, s1]) {
+          if (typeof s !== 'string' || !s.startsWith('http')) continue;
+          const low = s.toLowerCase();
+          if (low.endsWith('.mp3')) continue;
+          if (isImageUrl(low)) continue;
+          if (low.includes('musicfile.removeai.ai')) found.unshift(s);
+          else found.push(s);
+        }
+        if (found.length) {
+          const baseTitle =
+            (typeof items?.[0]?.title === 'string' && items[0].title.trim().length ? items[0].title.trim() : null) ||
+            (typeof title === 'string' && title.trim().length ? title.trim() : null) ||
+            'New Track';
+          const titles = found.length >= 2 ? [baseTitle, `${baseTitle} 2`] : [baseTitle];
+          console.log('[Server] Found stream in TEXT callback - Emitting now!', { task_id, urls_len: found.length, elapsedMs });
+          const payload = { url: found[0], audio_url: found[0], stream_url: found[0], download_url: null, urls: found.slice(0, 2), cover, title: titles[0], titles, task_id, callbackType: `${callbackType}_early`, items };
+          if (profile_id) {
+            try { io.to(profile_id).emit('suno:status', { task_id: task_id ? String(task_id) : null, status: 'success', message: 'Ready' }); } catch {}
+            try { io.to(profile_id).emit('suno:track', payload); } catch {}
+            try { await upsertTracksForProfile(profile_id, found.slice(0, 2), null, baseTitle, cover, task_id ? String(task_id) : null, 'callback_text'); } catch {}
+          } else {
+            io.emit('suno:track', payload);
+          }
+          return res.status(200).json({ status: 'ok' });
+        }
+      } catch {}
+    }
     if (Array.isArray(items) && items.length && urls.length === 0) {
       try {
         const k = Object.keys(items[0] || {}).slice(0, 25);

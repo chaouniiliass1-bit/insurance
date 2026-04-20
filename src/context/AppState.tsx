@@ -672,76 +672,28 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           // Auto-navigate to Player if not already there
           navigate('Player');
 
-          // Persist Track A + Track B once to Supabase (no extra variants)
+          // Server is the source of truth for Library rows. Only resolve track IDs for like/history.
           try {
             const pid = profileIdRef.current;
-            if (!pid) {
-              console.warn('[Supabase][BulkInsert] profileId missing — skipping insert');
-            }
             if (pid) {
-              const genresArr = [g1Ref.current, g2Ref.current].filter(Boolean) as string[];
-              const rows: Array<{ profile_id: string; audio_url: string; title?: string | null; mood?: string | null; genres?: string[] | null; liked?: boolean | null; image_url?: string | null; stream_url?: string | null; mp3_url?: string | null }> = [];
-
-              if (primaryA && !insertedUrlsRef.current.has(primaryA)) {
-                insertedUrlsRef.current.add(primaryA);
-                rows.push({
-                  profile_id: pid,
-                  audio_url: primaryA,
-                  title: titleA ?? null,
-                  mood: moodRef.current ?? null,
-                  genres: genresArr,
-                  liked: false,
-                  image_url: coverA ?? null,
-                  stream_url: firstOk,
-                  mp3_url: dlA ?? firstOk,
-                });
-              }
-              if (primaryB && !insertedUrlsRef.current.has(primaryB)) {
-                insertedUrlsRef.current.add(primaryB);
-                rows.push({
-                  profile_id: pid,
-                  audio_url: primaryB,
-                  title: titleB ?? null,
-                  mood: moodRef.current ?? null,
-                  genres: genresArr,
-                  liked: false,
-                  image_url: coverB ?? null,
-                  stream_url: secondOk,
-                  mp3_url: dlB ?? secondOk,
-                });
-              }
-
-              if (rows.length) {
-                const resp: any = await supabaseApi.insertTracksBulk(rows);
-                const inserted = Array.isArray(resp?.data) ? resp.data : [];
-                const rowFor = (u: string | null) => inserted.find((r: any) => typeof r?.audio_url === 'string' && r.audio_url === u) || null;
-                const aRow = primaryA ? rowFor(primaryA) : null;
-                const bRow = primaryB ? rowFor(primaryB) : null;
-
-                if (aRow?.id != null) setTrackIdA(String(aRow.id));
-                if (bRow?.id != null) setTrackIdB(String(bRow.id));
-                setTrackLikedA(typeof aRow?.liked === 'boolean' ? aRow.liked : false);
-                setTrackLikedB(typeof bRow?.liked === 'boolean' ? bRow.liked : false);
-
-                if (!aRow?.id && pid && primaryA) {
+              const resolveId = async (audioUrl: string | null, setter: (v: string) => void) => {
+                if (!audioUrl) return;
+                for (let i = 0; i < 6; i++) {
                   try {
-                    const found = await supabaseApi.findTrackIdByUrl(pid, primaryA);
-                    const id = (found as any)?.data ? String((found as any).data) : null;
-                    if (id) setTrackIdA(id);
+                    const found: any = await supabaseApi.findTrackIdByUrl(pid, audioUrl);
+                    const id = found?.data ? String(found.data) : null;
+                    if (id) {
+                      setter(id);
+                      return;
+                    }
                   } catch {}
+                  await new Promise((r) => setTimeout(r, 500));
                 }
-                if (!bRow?.id && pid && primaryB) {
-                  try {
-                    const found = await supabaseApi.findTrackIdByUrl(pid, primaryB);
-                    const id = (found as any)?.data ? String((found as any).data) : null;
-                    if (id) setTrackIdB(id);
-                  } catch {}
-                }
-              }
+              };
+              void resolveId(primaryA, setTrackIdA);
+              void resolveId(primaryB, setTrackIdB);
             }
-          } catch (dbErr) {
-             console.warn('[Client] Bulk insert failed', dbErr);
-          }
+          } catch {}
         } catch (err) {
           console.warn('[Client] suno:track handling failed', err);
         }

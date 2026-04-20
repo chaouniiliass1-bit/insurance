@@ -258,10 +258,27 @@ async function upsertTracksForProfile(profile_id, urls, download_url, title, cov
       };
       const dl = Array.isArray(download_url) ? download_url[i] : download_url;
       if (typeof dl === 'string' && dl.startsWith('http') && dl.toLowerCase().endsWith('.mp3')) row.mp3_url = dl;
-      const existing = await supabaseAdmin.from('tracks').select('id').eq('profile_id', pid).eq('audio_url', u).limit(1);
-      const id = Array.isArray(existing?.data) && existing.data[0]?.id ? existing.data[0].id : null;
-      if (id) await supabaseAdmin.from('tracks').update(row).eq('id', id);
-      else await supabaseAdmin.from('tracks').insert(row);
+      let id = null;
+      try {
+        const existing = await supabaseAdmin.from('tracks').select('id').eq('profile_id', pid).eq('audio_url', u).order('created_at', { ascending: false }).limit(1);
+        id = Array.isArray(existing?.data) && existing.data[0]?.id ? existing.data[0].id : null;
+      } catch {}
+      if (id) {
+        await supabaseAdmin.from('tracks').update(row).eq('id', id);
+      } else {
+        try {
+          await supabaseAdmin.from('tracks').upsert(row, { onConflict: 'profile_id,audio_url' });
+        } catch {
+          await supabaseAdmin.from('tracks').insert(row);
+        }
+      }
+      try {
+        const dup = await supabaseAdmin.from('tracks').select('id').eq('profile_id', pid).eq('audio_url', u).order('created_at', { ascending: false }).limit(5);
+        const ids = Array.isArray(dup?.data) ? dup.data.map((r) => r?.id).filter(Boolean) : [];
+        if (ids.length > 1) {
+          await supabaseAdmin.from('tracks').delete().in('id', ids.slice(1));
+        }
+      } catch {}
     }
     console.log('[Server] tracks upsert from poll', { profile_id: pid, task_id: task_id || null, source: source || 'poll', urls_len: urls.length });
   } catch (e) {

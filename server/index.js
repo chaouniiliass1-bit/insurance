@@ -416,7 +416,10 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
             }
           }
         }
-        const urls = [streamByIndex[0], streamByIndex[1]].filter((x) => typeof x === 'string');
+        const s0 = typeof streamByIndex[0] === 'string' ? streamByIndex[0] : null;
+        const s1 = typeof streamByIndex[1] === 'string' ? streamByIndex[1] : null;
+        const urls = [s0, s1].filter((x) => typeof x === 'string');
+        const onlySecond = !s0 && !!s1;
         console.log('[Server] Poll record-info', { taskId: tid, attempt, status: statusStr || status, urls_len: urls.length, elapsedMs });
 
         if (statusStr !== 'SUCCESS') {
@@ -425,13 +428,13 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
             const prevSig = lastSigByTask.get(tid) || null;
             if (!prevSig || prevSig !== sig) {
               lastSigByTask.set(tid, sig);
-              const titles = urls.length >= 2 ? [baseTitle, `${baseTitle} 2`] : [baseTitle];
+              const titles = onlySecond ? [`${baseTitle} 2`] : (urls.length >= 2 ? [baseTitle, `${baseTitle} 2`] : [baseTitle]);
               console.log('EARLY CATCH: Found stream URL before completion:', { urls, elapsedMs });
               const out = { url: urls[0], audio_url: urls[0], stream_url: urls[0], download_url: null, urls, cover: pickedCover, title: titles[0], titles, task_id: tid, callbackType: 'poll_early', items: metaCandidates.slice(0, 2) };
               if (room) {
                 try { io.to(room).emit('suno:status', { task_id: tid, status: 'success', message: 'Ready' }); } catch {}
                 try { io.to(room).emit('suno:track', out); } catch {}
-                try { await upsertTracksForProfile(room, urls, null, baseTitle, pickedCover, tid, 'poll_early'); } catch {}
+                try { await upsertTracksForProfile(room, urls, null, onlySecond ? `${baseTitle} 2` : baseTitle, pickedCover, tid, 'poll_early'); } catch {}
               } else {
                 io.emit('suno:track', out);
               }
@@ -448,7 +451,7 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
             const prevSig = lastSigByTask.get(tid) || null;
             if (!prevSig || prevSig !== sig) {
               lastSigByTask.set(tid, sig);
-              const titles = urls.length >= 2 ? [baseTitle, `${baseTitle} 2`] : [baseTitle];
+              const titles = onlySecond ? [`${baseTitle} 2`] : (urls.length >= 2 ? [baseTitle, `${baseTitle} 2`] : [baseTitle]);
               const out = { url: urls[0], audio_url: urls[0], stream_url: urls[0], download_url: mp3s[0] || null, urls, cover: pickedCover, title: titles[0], titles, task_id: tid, callbackType: 'poll', items: metaCandidates.slice(0, 2) };
               if (room) {
                 try { io.to(room).emit('suno:status', { task_id: tid, status: 'success', message: 'Ready' }); } catch {}
@@ -458,7 +461,7 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
               }
             }
           } catch {}
-          try { await upsertTracksForProfile(room, urls, mp3s, baseTitle, pickedCover, tid, 'poll'); } catch {}
+          try { await upsertTracksForProfile(room, urls, mp3s, onlySecond ? `${baseTitle} 2` : baseTitle, pickedCover, tid, 'poll'); } catch {}
           pollingByTaskId.delete(tid);
           return;
         }
@@ -1963,8 +1966,8 @@ async function handleSunoCallback(req, res) {
         (typeof items?.[0]?.title === 'string' && items[0].title.trim().length ? items[0].title.trim() : null) ||
         (typeof title === 'string' && title.trim().length ? title.trim() : null) ||
         'New Track';
-      const streams = [];
-      const mp3s = [];
+      const streamByIndex = [];
+      const mp3ByIndex = [];
       for (let i = 0; i < Math.min(2, items.length); i++) {
         const it = items[i] || {};
         const stream =
@@ -1977,23 +1980,29 @@ async function handleSunoCallback(req, res) {
           normalizeExternalUrl(it?.proxy_url) ||
           normalizeExternalUrl(it?.proxyUrl) ||
           null;
-        if (stream && stream.startsWith('http') && !stream.toLowerCase().endsWith('.mp3')) streams.push(stream);
+        if (stream && stream.startsWith('http') && !stream.toLowerCase().endsWith('.mp3')) streamByIndex[i] = stream;
         const mp3 =
           normalizeExternalUrl(it?.audio_url) ||
           normalizeExternalUrl(it?.audioUrl) ||
           normalizeExternalUrl(it?.source_audio_url) ||
           normalizeExternalUrl(it?.sourceAudioUrl) ||
           null;
-        if (mp3 && mp3.startsWith('http') && mp3.toLowerCase().endsWith('.mp3')) mp3s.push(mp3);
-        else mp3s.push(null);
+        if (mp3 && mp3.startsWith('http') && mp3.toLowerCase().endsWith('.mp3')) mp3ByIndex[i] = mp3;
+        else mp3ByIndex[i] = null;
       }
-      const finalStreams = streams.length ? streams : urls;
-      const titles = finalStreams.length >= 2 ? [baseTitle, `${baseTitle} 2`] : [baseTitle];
+      const s0 = typeof streamByIndex[0] === 'string' ? streamByIndex[0] : null;
+      const s1 = typeof streamByIndex[1] === 'string' ? streamByIndex[1] : null;
+      const finalStreams = [s0, s1].filter((x) => typeof x === 'string');
+      if (!finalStreams.length) {
+        for (const u of urls) finalStreams.push(u);
+      }
+      const onlySecond = !s0 && !!s1 && finalStreams.length === 1;
+      const titles = onlySecond ? [`${baseTitle} 2`] : (finalStreams.length >= 2 ? [baseTitle, `${baseTitle} 2`] : [baseTitle]);
       console.log('[Server] Emitting suno:track (broadcast)', { task_id, callbackType, urls_len: finalStreams.length, url: finalStreams[0] || null });
       if (profile_id) {
         try {
-          const dl = isCompleteSignal ? mp3s : null;
-          await upsertTracksForProfile(profile_id, finalStreams, dl, baseTitle, typeof cover === 'string' ? cover : null, task_id ? String(task_id) : null, 'callback');
+          const mp3s = isCompleteSignal ? [mp3ByIndex[0] || null, mp3ByIndex[1] || null] : null;
+          await upsertTracksForProfile(profile_id, finalStreams, mp3s, onlySecond ? `${baseTitle} 2` : baseTitle, typeof cover === 'string' ? cover : null, task_id ? String(task_id) : null, 'callback');
         } catch (e) {
           console.warn('[Server] tracks upsert from callback failed', e?.message || e);
         }
@@ -2001,8 +2010,9 @@ async function handleSunoCallback(req, res) {
       if (profile_id) {
         try { io.to(profile_id).emit('suno:status', { task_id: task_id ? String(task_id) : null, status: 'success', message: 'Ready' }); } catch {}
       }
-      console.log('[Server] Extracted URLs', { task_id: task_id ? String(task_id) : null, callbackType, streams: finalStreams, mp3s: isCompleteSignal ? mp3s : null });
-      const payload = { url: finalStreams[0], audio_url: finalStreams[0], stream_url: finalStreams[0], download_url: isCompleteSignal ? (mp3s[0] || null) : null, urls: finalStreams, cover, title: titles[0], titles, task_id, callbackType, items };
+      const mp3s = isCompleteSignal ? [mp3ByIndex[0] || null, mp3ByIndex[1] || null] : null;
+      console.log('[Server] Extracted URLs', { task_id: task_id ? String(task_id) : null, callbackType, streams: finalStreams, mp3s });
+      const payload = { url: finalStreams[0], audio_url: finalStreams[0], stream_url: finalStreams[0], download_url: isCompleteSignal ? (mp3s?.[0] || null) : null, urls: finalStreams, cover, title: titles[0], titles, task_id, callbackType, items };
       if (profile_id) io.to(profile_id).emit('suno:track', payload);
       else io.emit('suno:track', payload);
       return res.status(200).json({ status: 'ok' });

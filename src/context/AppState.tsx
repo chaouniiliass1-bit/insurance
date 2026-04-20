@@ -498,7 +498,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       });
       client.on('suno:track', async (evt: any) => {
         console.log('[Client] suno:track RECEIVED', { task_id: evt?.task_id, callbackType: evt?.callbackType });
-        setIsGenerating(false);
         setIsRequesting(false);
         setIsPreloading(false);
         setStatusLabel('');
@@ -656,6 +655,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           }
 
           // Reset generation state immediately to unlock UI
+          if (cbType === 'complete' || !!primaryB) {
+            setIsGenerating(false);
+          } else {
+            setIsGenerating(true);
+          }
           currentTaskIdRef.current = null;
 
           // Persistence

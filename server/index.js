@@ -69,13 +69,12 @@ function extractUrlsAllKeys(root) {
   const maxResults = 80;
   let nodes = 0;
 
-  const add = (raw, path) => {
-    const s = normalizeExternalUrl(raw);
+  const addOne = (candidate, path) => {
+    const s = normalizeExternalUrl(candidate);
     if (!s) return;
     if (!s.startsWith('http://') && !s.startsWith('https://')) return;
     const low = s.toLowerCase();
-    const p = String(path || '').toLowerCase();
-    if (!(low.includes('removeai.ai') || low.includes('suno.ai') || p.includes('stream'))) return;
+    if (!low.includes('http')) return;
     if (results.some((r) => r.url === s)) return;
     const idxMatch = String(path || '').match(/\[(\d+)\]/);
     const index = idxMatch ? Number(idxMatch[1]) : null;
@@ -83,6 +82,19 @@ function extractUrlsAllKeys(root) {
     const isStreamKey = String(path || '').toLowerCase().includes('stream');
     const isPrimaryStream = low.includes('musicfile.removeai.ai');
     results.push({ url: s, path: String(path || ''), index, isMp3, isStreamKey, isPrimaryStream });
+  };
+  const add = (raw, path) => {
+    if (typeof raw !== 'string') return;
+    const t = raw.trim();
+    if (!t) return;
+    if (t.includes('http://') || t.includes('https://')) {
+      const matches = t.match(/https?:\/\/[^\s"'`<>]+/g) || [];
+      if (matches.length) {
+        for (const m of matches) addOne(m, path);
+        return;
+      }
+    }
+    addOne(t, path);
   };
 
   while (stack.length && nodes < maxNodes && results.length < maxResults) {
@@ -309,6 +321,19 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
         const d = payload?.data || {};
         const status = d?.status || d?.state || d?.task_status || null;
         const statusStr = String(status || '').toUpperCase();
+        if (statusStr && statusStr !== 'SUCCESS') {
+          try {
+            const dbgArr =
+              (Array.isArray(d?.data) ? d.data : null) ||
+              (Array.isArray(d?.response?.data) ? d.response.data : null) ||
+              (Array.isArray(d?.response) ? d.response : null) ||
+              (Array.isArray(payload?.data) ? payload.data : null) ||
+              null;
+            if (dbgArr && dbgArr[0]) {
+              console.log('DEBUG FULL DATA:', JSON.stringify(dbgArr[0]));
+            }
+          } catch {}
+        }
         if (room && statusStr && statusStr !== 'SUCCESS') {
           try {
             io.to(room).emit('suno:status', { task_id: tid, status: statusStr, message: statusStr === 'TEXT_SUCCESS' ? 'Still Cooking…' : 'Finalizing track…' });
@@ -1623,7 +1648,7 @@ app.post('/proxy/suno/generate', async (req, res) => {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    console.log('[Server] Suno API Response:', { status: resp.status, data: resp.data });
+    console.log('[Server] Suno API Response:', { status: resp.status, data: resp.data, apiBase: API_BASE, keyLen: API_KEY.length });
     try {
       console.log('Full Suno Response:', JSON.stringify(resp.data));
     } catch {}
@@ -1706,6 +1731,10 @@ async function handleSunoCallback(req, res) {
     const ip = req.ip || req.connection?.remoteAddress || 'unknown';
     const isHutool = String(ua || '').toLowerCase().includes('hutool');
     console.log('[Server] RECEIVED CALLBACK FROM SUNO', { ip, xf, ct, ua });
+    try {
+      const raw = JSON.stringify(req.body || {});
+      console.log('[Server] CALLBACK RAW BODY:', raw.length > 20000 ? raw.slice(0, 20000) : raw);
+    } catch {}
     if (isHutool) {
       try { console.log('[Server] Hutool callback UA detected; forcing non-blocking 200 flow'); } catch {}
     }

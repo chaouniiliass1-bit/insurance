@@ -338,6 +338,43 @@ export default function LibraryScreen() {
               style={styles.saveBtn}
               onPress={(e: any) => {
                 try { e?.stopPropagation?.(); } catch {}
+                if (!profileId && !lastProfileIdRef.current) {
+                  Alert.alert('Profile required', 'Please create/select a profile to favorite tracks.');
+                  return;
+                }
+                const next = !(liked ?? false);
+                setItems((prev) => prev.map((x) => {
+                  const k = (x?.id || x?.stream_url || x?.audio_url || '') as string;
+                  if (k !== stableKey) return x;
+                  return { ...x, liked: next };
+                }));
+                void (async () => {
+                  try { await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
+                  try {
+                    const effectiveProfileId = profileId || lastProfileIdRef.current;
+                    let trackId = id;
+                    if (!trackId && effectiveProfileId && audioUrl) {
+                      const found: any = await supabaseApi.findTrackIdByUrl(effectiveProfileId, audioUrl);
+                      trackId = found?.data ? String(found.data) : null;
+                    }
+                    if (trackId) {
+                      await supabaseApi.updateTrackLiked(trackId, next);
+                    }
+                  } catch {}
+                })();
+              }}
+              hitSlop={10}
+            >
+              <MaterialIcons
+                name={(liked ?? false) ? 'favorite' : 'favorite-border'}
+                size={20}
+                color={'rgba(255,255,255,0.92)'}
+              />
+            </Pressable>
+            <Pressable
+              style={styles.saveBtn}
+              onPress={(e: any) => {
+                try { e?.stopPropagation?.(); } catch {}
                 const list = [mp3Url].filter(Boolean) as string[];
                 if (!list.length) {
                   Alert.alert('Download unavailable', 'This track is still syncing. Try again in a moment.');

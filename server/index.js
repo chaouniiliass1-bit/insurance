@@ -66,6 +66,49 @@ function isImageUrl(u) {
   return low.endsWith('.jpg') || low.endsWith('.jpeg') || low.endsWith('.png') || low.endsWith('.gif') || low.endsWith('.webp');
 }
 
+function isPreferredMp3Url(u) {
+  if (typeof u !== 'string') return false;
+  const s = normalizeExternalUrl(u);
+  if (!s) return false;
+  const low = s.toLowerCase();
+  if (!low.endsWith('.mp3')) return false;
+  if (low.includes('removeai.ai')) return false;
+  try {
+    const host = new URL(s).hostname.toLowerCase();
+    return host.includes('tempfile.aiquickdraw.com') || host === 'cdn1.suno.ai';
+  } catch {
+    return false;
+  }
+}
+
+const verifiedMp3UrlCache = new Map();
+async function verifyMp3Url(u) {
+  const s = normalizeExternalUrl(u);
+  if (!s) return false;
+  if (verifiedMp3UrlCache.has(s)) return verifiedMp3UrlCache.get(s);
+  if (!isPreferredMp3Url(s)) {
+    verifiedMp3UrlCache.set(s, false);
+    return false;
+  }
+  try {
+    const resp = await axios.head(s, {
+      maxRedirects: 0,
+      timeout: 2500,
+      httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
+      validateStatus: (st) => st >= 200 && st < 400,
+      headers: { Accept: '*/*', 'User-Agent': 'Mozilla/5.0' },
+    });
+    const ct = String(resp?.headers?.['content-type'] || '').toLowerCase();
+    const cl = Number(resp?.headers?.['content-length'] || 0) || 0;
+    const ok = (ct.includes('audio') || ct.includes('mpeg')) && cl > 1000;
+    verifiedMp3UrlCache.set(s, ok);
+    return ok;
+  } catch {
+    verifiedMp3UrlCache.set(s, false);
+    return false;
+  }
+}
+
 function extractUrlsAllKeys(root) {
   const results = [];
   const visited = new Set();
@@ -257,7 +300,11 @@ async function upsertTracksForProfile(profile_id, urls, download_url, title, cov
         image_url: typeof cover === 'string' ? cover : null,
       };
       const dl = Array.isArray(download_url) ? download_url[i] : download_url;
-      if (typeof dl === 'string' && dl.startsWith('http') && dl.toLowerCase().endsWith('.mp3')) row.mp3_url = dl;
+      if (typeof dl === 'string' && isPreferredMp3Url(dl)) {
+        try {
+          if (await verifyMp3Url(dl)) row.mp3_url = normalizeExternalUrl(dl);
+        } catch {}
+      }
       let id = null;
       try {
         const existing = await supabaseAdmin.from('tracks').select('id').eq('profile_id', pid).eq('audio_url', u).order('created_at', { ascending: false }).limit(1);
@@ -458,10 +505,10 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
           const idx = typeof entry.index === 'number' && entry.index >= 0 && entry.index <= 1 ? entry.index : null;
           if (entry.isMp3) {
             if (idx != null) {
-              if (!mp3ByIndex[idx]) mp3ByIndex[idx] = entry.url;
+              if (!mp3ByIndex[idx] && isPreferredMp3Url(entry.url)) mp3ByIndex[idx] = entry.url;
             } else {
-              if (!mp3ByIndex[0]) mp3ByIndex[0] = entry.url;
-              else if (!mp3ByIndex[1]) mp3ByIndex[1] = entry.url;
+              if (!mp3ByIndex[0] && isPreferredMp3Url(entry.url)) mp3ByIndex[0] = entry.url;
+              else if (!mp3ByIndex[1] && isPreferredMp3Url(entry.url)) mp3ByIndex[1] = entry.url;
             }
             continue;
           }
@@ -2102,7 +2149,7 @@ async function handleSunoCallback(req, res) {
           normalizeExternalUrl(it?.source_audio_url) ||
           normalizeExternalUrl(it?.sourceAudioUrl) ||
           null;
-        if (mp3 && mp3.startsWith('http') && mp3.toLowerCase().endsWith('.mp3')) mp3ByIndex[i] = mp3;
+        if (mp3 && mp3.startsWith('http') && isPreferredMp3Url(mp3)) mp3ByIndex[i] = mp3;
         else mp3ByIndex[i] = null;
       }
       const s0 = typeof streamByIndex[0] === 'string' ? streamByIndex[0] : null;

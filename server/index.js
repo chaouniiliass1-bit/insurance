@@ -417,6 +417,15 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
         const baseTitle = pickedTitle || 'New Track';
         const streamByIndex = [];
         const mp3ByIndex = [];
+        try {
+          const respArr = Array.isArray(response?.data) ? response.data : Array.isArray(response) ? response : null;
+          if (respArr && respArr[0]) {
+            const sA = normalizeExternalUrl(respArr?.[0]?.stream_audio_url || respArr?.[0]?.streamAudioUrl || null);
+            const sB = normalizeExternalUrl(respArr?.[1]?.stream_audio_url || respArr?.[1]?.streamAudioUrl || null);
+            if (sA && sA.startsWith('http') && !sA.toLowerCase().endsWith('.mp3')) streamByIndex[0] = sA;
+            if (sB && sB.startsWith('http') && !sB.toLowerCase().endsWith('.mp3')) streamByIndex[1] = sB;
+          }
+        } catch {}
         const allKeyUrls = extractUrlsAllKeys(payload);
         for (const entry of allKeyUrls) {
           try {
@@ -453,8 +462,9 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
         const s0 = typeof streamByIndex[0] === 'string' ? streamByIndex[0] : null;
         const s1 = typeof streamByIndex[1] === 'string' ? streamByIndex[1] : null;
         const urls = [s0, s1].filter((x) => typeof x === 'string');
+        const forcedUrlsLen = urls.length;
         const onlySecond = !s0 && !!s1;
-        console.log('[Server] Poll record-info', { taskId: tid, attempt, status: statusStr || status, urls_len: urls.length, elapsedMs });
+        console.log('[Server] Poll record-info', { taskId: tid, attempt, status: statusStr || status, urls_len: forcedUrlsLen, elapsedMs });
 
         if (statusStr !== 'SUCCESS') {
           if (urls.length) {

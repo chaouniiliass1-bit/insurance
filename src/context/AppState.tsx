@@ -47,6 +47,9 @@ import { useKeepAwake } from 'expo-keep-awake';
   addCoins: (amount: number, planName?: string, priceUsd?: number) => Promise<void> | void;
   isLiked: (url: string | null) => boolean;
   toggleLike: (url: string | null) => Promise<void> | void;
+  playbackPositionMillis: number;
+  playbackDurationMillis: number;
+  seekToMillis: (positionMillis: number) => Promise<void>;
   setMood: (mood: string) => Promise<void> | void;
   setGenres: (g1: string, g2: string) => Promise<void> | void;
   generateTrack: (mood?: string, genre1?: string, genre2?: string) => Promise<void>;
@@ -112,12 +115,30 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [isSecondActive, setIsSecondActive] = useState<boolean>(false);
   const [credits, setCredits] = useState<number>(3);
   const [likesMap, setLikesMap] = useState<Record<string, boolean>>({});
+  const [playbackPositionMillis, setPlaybackPositionMillis] = useState<number>(0);
+  const [playbackDurationMillis, setPlaybackDurationMillis] = useState<number>(0);
   const [profile, setProfile] = useState<{ nickname: string; avatar_url: string | null; keep_logged_in?: boolean | null } | null>(null);
   const [profileId, setProfileId] = useState<string | null>(null);
   const profileIdRef = useRef<string | null>(null);
   const moodRef = useRef<string | null>(null);
   const g1Ref = useRef<string | null>(null);
   const g2Ref = useRef<string | null>(null);
+
+  useEffect(() => {
+    audioService.setStatusListener((status: any) => {
+      if (!status || !status.isLoaded) return;
+      const nextPos = typeof status.positionMillis === 'number' && Number.isFinite(status.positionMillis) ? status.positionMillis : 0;
+      const nextDur =
+        typeof status.durationMillis === 'number' && Number.isFinite(status.durationMillis) && status.durationMillis > 0
+          ? status.durationMillis
+          : (typeof status.playableDurationMillis === 'number' && Number.isFinite(status.playableDurationMillis) ? status.playableDurationMillis : 0);
+      setPlaybackPositionMillis(nextPos > 0 ? nextPos : 0);
+      setPlaybackDurationMillis(nextDur > 0 ? nextDur : 0);
+    });
+    return () => {
+      try { audioService.setStatusListener(undefined); } catch {}
+    };
+  }, []);
   const currentTaskIdRef = useRef<string | null>(null);
   const processedTaskIdsRef = useRef<Set<string>>(new Set());
   const savedForTaskRef = useRef<string | null>(null);
@@ -1401,7 +1422,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     [userMood, genre1, genre2, vocalMode, trackUrl, trackA, trackB, trackCover, trackTitle, trackIdA, trackIdB, trackLikedA, trackLikedB, isGenerating, isRequesting, hasSunoBalance, generationProgress, providerLabel, isPreloading, hasStartedPlayback, statusLabel, isSecondActive, credits, likesMap, profile]
   );
 
-  return <AppStateContext.Provider value={{ ...value, profile, profileId }}>{children}</AppStateContext.Provider>;
+  return <AppStateContext.Provider value={{ ...value, profile, profileId, playbackPositionMillis, playbackDurationMillis, seekToMillis: async (positionMillis: number) => { await audioService.seek(positionMillis); } }}>{children}</AppStateContext.Provider>;
 }
 
 export function useAppState() {

@@ -55,7 +55,7 @@ const AnimatedLinearGradient = Animated.createAnimatedComponent(LinearGradient);
 
 export default function PlayerScreen() {
   const route = useRoute<any>();
-  const { userMood, genre1, genre2, trackUrl, trackA, trackB, trackCover, trackTitle, trackIdA, trackIdB, hasStartedPlayback, isSecondActive, setSecondActive, credits, isGenerating, statusLabel, generationStartedAtMs, trackAReadyAtMs, trackBReadyAtMs, generateTrack, hasSavedMatch, playSavedMatch, isLiked, toggleLike, addCoins, profile, refreshProfile, connectSocket, disconnectSocket } = useAppState() as any;
+  const { userMood, genre1, genre2, trackUrl, trackA, trackB, trackCover, trackTitle, trackIdA, trackIdB, hasStartedPlayback, isSecondActive, setSecondActive, credits, isGenerating, statusLabel, generationStartedAtMs, trackAReadyAtMs, trackBReadyAtMs, generateTrack, hasSavedMatch, playSavedMatch, isLiked, toggleLike, addCoins, profile, refreshProfile, connectSocket, disconnectSocket, playbackPositionMillis, playbackDurationMillis, seekToMillis } = useAppState() as any;
   const insets = useSafeAreaInsets();
   const [isPlaying, setIsPlaying] = useState(false);
   const activePlaybackUrl: string | null = (isSecondActive && trackB) ? trackB : trackUrl;
@@ -64,10 +64,6 @@ export default function PlayerScreen() {
   const [resumePositionMillis, setResumePositionMillis] = useState<number>(0);
   const resumeAppliedForRef = useRef<string | null>(null);
   const lastPersistAtRef = useRef<number>(0);
-
-  const tp = useTrackPlayerProgress(500);
-  const tpPosMs = Math.floor((tp?.position || 0) * 1000);
-  const tpDurMs = Math.floor((tp?.duration || 0) * 1000);
 
   // Navigation Guard: Connect socket onFocus, disconnect onBlur
   useFocusEffect(
@@ -91,6 +87,7 @@ export default function PlayerScreen() {
   const [showCongrats, setShowCongrats] = useState(false);
   const [showGenMenu, setShowGenMenu] = useState(false);
   const lastLogRef = useRef<number>(0);
+  const lastSeekAtRef = useRef<number>(0);
   const trackFade = useSharedValue(1);
   // Next-track generation now uses global callback flow
   // Mood image crossfade state
@@ -165,30 +162,16 @@ export default function PlayerScreen() {
 
   useEffect(() => {
     audioService.configure();
-    audioService.setStatusListener((status) => {
-      if ('isLoaded' in status && status.isLoaded) {
-        const nextDur = typeof status.durationMillis === 'number' && Number.isFinite(status.durationMillis) ? status.durationMillis : 0;
-        const nextPos = typeof status.positionMillis === 'number' && Number.isFinite(status.positionMillis) ? status.positionMillis : 0;
-        setDuration(nextDur > 0 ? nextDur : 0);
-        // @ts-ignore
-        setIsPlaying(!!status.isPlaying);
-        if (!isSeekingRef.current) {
-          setPosition(nextPos > 0 ? nextPos : 0);
-        }
-
-        // Quiet production: avoid noisy seek and finish logs
-      }
-    });
   }, []);
 
   useEffect(() => {
-    if (tpDurMs > 0) {
-      setDuration(tpDurMs);
-      if (!isSeekingRef.current) {
-        setPosition(tpPosMs > 0 ? tpPosMs : 0);
-      }
+    const nextDur = typeof playbackDurationMillis === 'number' && Number.isFinite(playbackDurationMillis) ? playbackDurationMillis : 0;
+    const nextPos = typeof playbackPositionMillis === 'number' && Number.isFinite(playbackPositionMillis) ? playbackPositionMillis : 0;
+    setDuration(nextDur > 0 ? nextDur : 0);
+    if (!isSeekingRef.current) {
+      setPosition(nextPos > 0 ? nextPos : 0);
     }
-  }, [tpDurMs, tpPosMs]);
+  }, [playbackDurationMillis, playbackPositionMillis]);
 
   useEffect(() => {
     let alive = true;
@@ -475,19 +458,26 @@ export default function PlayerScreen() {
     seekPositionRef.current = target;
     setIsSeeking(true);
     setSeekPosition(target);
-  }, [duration]);
+    try {
+      const now = Date.now();
+      if (now - (lastSeekAtRef.current || 0) > 160) {
+        lastSeekAtRef.current = now;
+        void seekToMillis(target);
+      }
+    } catch {}
+  }, [duration, seekToMillis]);
 
   const onSliderComplete = useCallback(async (sec: number) => {
     if (!duration || duration <= 0) return;
     const target = Math.max(0, Math.floor(sec)) * 1000;
     seekPositionRef.current = target;
     try {
-      await audioService.seek(target);
+      await seekToMillis(target);
       setPosition(target);
     } catch {}
     isSeekingRef.current = false;
     setIsSeeking(false);
-  }, [duration]);
+  }, [duration, seekToMillis]);
 
   const timelineTouchRef = useRef<View | null>(null);
   const timelineXRef = useRef(0);
@@ -623,27 +613,29 @@ export default function PlayerScreen() {
                           />
                         ) : (
                           <View
-                            style={styles.timelineBarPending}
+                            ref={timelineTouchRef}
+                            style={styles.timelineTouch}
                             onLayout={(e) => {
                               const width = e?.nativeEvent?.layout?.width;
                               if (typeof width === 'number' && width > 0) {
                                 timelineWRef.current = width;
                                 setTimelineWidth(width);
                               }
+                              refreshTimelineMetrics();
                             }}
+                            {...timelinePanResponder.panHandlers}
                           >
-                            <LinearGradient
-                              colors={['rgba(92, 115, 255, 0.16)', 'rgba(255,255,255,0.06)', 'rgba(92, 115, 255, 0.12)']}
-                              start={{ x: 0, y: 0 }}
-                              end={{ x: 1, y: 0 }}
-                              style={StyleSheet.absoluteFillObject}
-                            />
-                            <AnimatedLinearGradient
-                              colors={['rgba(255,255,255,0)', 'rgba(165, 198, 255, 0.18)', 'rgba(255,255,255,0.95)', 'rgba(165, 198, 255, 0.18)', 'rgba(255,255,255,0)']}
-                              start={{ x: 0, y: 0 }}
-                              end={{ x: 1, y: 0 }}
-                              style={[styles.timelineShimmerSoft, { width: Math.max(140, Math.floor((timelineWidth || 0) * 0.45)) }, shimmerStyle]}
-                            />
+                            {(() => {
+                              const shownPos = visualPositionMillis;
+                              const progress = duration > 0 ? clamp01(shownPos / duration) : 0;
+                              const dotLeft = progress * (timelineWidth || 0);
+                              return (
+                                <View style={styles.timelineBar}>
+                                  <View style={[styles.timelineFill, { width: `${progress * 100}%` }]} />
+                                  <View style={[styles.timelineDot, { left: Math.max(0, dotLeft - 5) }]} />
+                                </View>
+                              );
+                            })()}
                           </View>
                         )}
                       </View>

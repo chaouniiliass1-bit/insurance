@@ -282,7 +282,7 @@ const RECENT_CALLBACKS_MAX = 200;
 const pollingByTaskId = new Map();
 // No device mapping; broadcast-only callbacks
 
-async function upsertTracksForProfile(profile_id, urls, download_url, title, cover, task_id, source) {
+async function upsertTracksForProfile(profile_id, urls, download_url, title, cover, task_id, source, durations) {
   const pid = String(profile_id || '').trim();
   if (!pid) return;
   if (!Array.isArray(urls) || !urls.length) return;
@@ -305,6 +305,8 @@ async function upsertTracksForProfile(profile_id, urls, download_url, title, cov
           if (await verifyMp3Url(dl)) row.mp3_url = normalizeExternalUrl(dl);
         } catch {}
       }
+      const dur = Array.isArray(durations) ? durations[i] : durations;
+      if (typeof dur === 'number' && Number.isFinite(dur) && dur > 0) row.duration = dur;
       let id = null;
       try {
         const existing = await supabaseAdmin.from('tracks').select('id').eq('profile_id', pid).eq('audio_url', u).order('created_at', { ascending: false }).limit(1);
@@ -542,7 +544,7 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
               if (room) {
                 try { io.to(room).emit('suno:status', { task_id: tid, status: 'success', message: 'Ready' }); } catch {}
                 try { io.to(room).emit('suno:track', out); } catch {}
-                try { await upsertTracksForProfile(room, urls, null, onlySecond ? `${baseTitle} 2` : baseTitle, pickedCover, tid, 'poll_early'); } catch {}
+                try { await upsertTracksForProfile(room, urls, null, onlySecond ? `${baseTitle} 2` : baseTitle, pickedCover, tid, 'poll_early', null); } catch {}
               } else {
                 io.emit('suno:track', out);
               }
@@ -569,7 +571,7 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
               }
             }
           } catch {}
-          try { await upsertTracksForProfile(room, urls, mp3s, onlySecond ? `${baseTitle} 2` : baseTitle, pickedCover, tid, 'poll'); } catch {}
+          try { await upsertTracksForProfile(room, urls, mp3s, onlySecond ? `${baseTitle} 2` : baseTitle, pickedCover, tid, 'poll', null); } catch {}
           pollingByTaskId.delete(tid);
           return;
         }
@@ -694,7 +696,7 @@ async function pollSunoTaskSafetyNet(taskId, profile_id) {
         console.log('[Server] SafetyNet poll record-info', { taskId: tid, attempt, status, urls_len: urls.length, elapsedMs });
         if (urls.length) {
           try {
-            await upsertTracksForProfile(room || profile_id || null, urls, null, null, null, tid, 'safetynet');
+            await upsertTracksForProfile(room || profile_id || null, urls, null, null, null, tid, 'safetynet', null);
           } catch {}
           if (room) {
             try { io.to(room).emit('suno:status', { task_id: tid, status: 'success', message: 'Ready' }); } catch {}
@@ -1219,7 +1221,7 @@ app.get('/supabase/tracks/by-profile', async (req, res) => {
   try {
     const profile_id = String(req.query.profile_id || '').trim();
     if (!profile_id) return res.status(400).json({ error: 'Missing profile_id' });
-    const select = encodeURIComponent('id,audio_url,title,mood,genres,liked,created_at,image_url,stream_url,mp3_url');
+    const select = encodeURIComponent('id,audio_url,title,mood,genres,liked,is_favorite,created_at,image_url,stream_url,mp3_url,duration');
     const url = `${SUPABASE_URL}/rest/v1/tracks?profile_id=eq.${encodeURIComponent(profile_id)}&select=${select}&order=created_at.desc`;
     const resp = await axios.get(url, { headers: supabaseHeaders(), timeout: 12000 });
     if (logCriticalIfSupabaseHtml(resp.data, 'GET /supabase/tracks/by-profile')) {
@@ -1299,12 +1301,48 @@ app.post('/supabase/tracks/update-liked', async (req, res) => {
     if (!track_id) return res.status(400).json({ error: 'track_id required' });
     if (typeof liked !== 'boolean') return res.status(400).json({ error: 'liked boolean required' });
     const url = `${SUPABASE_URL}/rest/v1/tracks?id=eq.${encodeURIComponent(track_id)}&select=id,liked`;
-    const resp = await axios.patch(url, { liked }, { headers: supabaseHeaders(), timeout: 10000 });
-    return res.status(resp.status || 200).json(resp.data);
+    try {
+      const resp = await axios.patch(url, { liked, is_favorite: liked }, { headers: supabaseHeaders(), timeout: 10000 });
+      return res.status(resp.status || 200).json(resp.data);
+    } catch (e) {
+      const status = e?.response?.status || 500;
+      if (status === 400) {
+        const resp2 = await axios.patch(url, { liked }, { headers: supabaseHeaders(), timeout: 10000 });
+        return res.status(resp2.status || 200).json(resp2.data);
+      }
+      throw e;
+    }
   } catch (e) {
     const status = e?.response?.status || 500;
     const data = e?.response?.data || { error: 'Supabase tracks update liked error' };
     console.error('[Server] Supabase tracks update liked error', { status, data });
+    return res.status(status).json(data);
+  }
+});
+
+app.get('/supabase/tracks/favorites/by-profile', async (req, res) => {
+  try {
+    const profile_id = String(req.query.profile_id || '').trim();
+    if (!profile_id) return res.status(400).json({ error: 'Missing profile_id' });
+    const select = encodeURIComponent('id,audio_url,title,mood,genres,liked,is_favorite,created_at,image_url,stream_url,mp3_url,duration');
+    const base = `${SUPABASE_URL}/rest/v1/tracks?profile_id=eq.${encodeURIComponent(profile_id)}&select=${select}&order=created_at.desc`;
+    try {
+      const url = `${base}&is_favorite=eq.true`;
+      const resp = await axios.get(url, { headers: supabaseHeaders(), timeout: 12000 });
+      return res.status(resp.status || 200).json(resp.data);
+    } catch (e) {
+      const status = e?.response?.status || 500;
+      if (status === 400) {
+        const url2 = `${base}&liked=eq.true`;
+        const resp2 = await axios.get(url2, { headers: supabaseHeaders(), timeout: 12000 });
+        return res.status(resp2.status || 200).json(resp2.data);
+      }
+      throw e;
+    }
+  } catch (e) {
+    const status = e?.response?.status || 500;
+    const data = e?.response?.data || { error: 'Supabase favorites list error' };
+    console.error('[Server] Supabase favorites list error', { status, data });
     return res.status(status).json(data);
   }
 });
@@ -2018,7 +2056,7 @@ async function handleSunoCallback(req, res) {
           if (profile_id) {
             try { io.to(profile_id).emit('suno:status', { task_id: task_id ? String(task_id) : null, status: 'success', message: 'Ready' }); } catch {}
             try { io.to(profile_id).emit('suno:track', payload); } catch {}
-            try { await upsertTracksForProfile(profile_id, found.slice(0, 2), null, baseTitle, cover, task_id ? String(task_id) : null, 'callback_text'); } catch {}
+            try { await upsertTracksForProfile(profile_id, found.slice(0, 2), null, baseTitle, cover, task_id ? String(task_id) : null, 'callback_text', null); } catch {}
           } else {
             io.emit('suno:track', payload);
           }
@@ -2130,6 +2168,7 @@ async function handleSunoCallback(req, res) {
         'New Track';
       const streamByIndex = [];
       const mp3ByIndex = [];
+      const durations = [];
       for (let i = 0; i < Math.min(2, items.length); i++) {
         const it = items[i] || {};
         const stream =
@@ -2151,6 +2190,9 @@ async function handleSunoCallback(req, res) {
           null;
         if (mp3 && mp3.startsWith('http') && isPreferredMp3Url(mp3)) mp3ByIndex[i] = mp3;
         else mp3ByIndex[i] = null;
+        const dur = Number(it?.duration);
+        if (Number.isFinite(dur) && dur > 0) durations[i] = dur;
+        else durations[i] = null;
       }
       const s0 = typeof streamByIndex[0] === 'string' ? streamByIndex[0] : null;
       const s1 = typeof streamByIndex[1] === 'string' ? streamByIndex[1] : null;
@@ -2164,7 +2206,7 @@ async function handleSunoCallback(req, res) {
       if (profile_id) {
         try {
           const mp3s = isCompleteSignal ? [mp3ByIndex[0] || null, mp3ByIndex[1] || null] : null;
-          await upsertTracksForProfile(profile_id, finalStreams, mp3s, onlySecond ? `${baseTitle} 2` : baseTitle, typeof cover === 'string' ? cover : null, task_id ? String(task_id) : null, 'callback');
+          await upsertTracksForProfile(profile_id, finalStreams, mp3s, onlySecond ? `${baseTitle} 2` : baseTitle, typeof cover === 'string' ? cover : null, task_id ? String(task_id) : null, 'callback', isCompleteSignal ? durations : null);
         } catch (e) {
           console.warn('[Server] tracks upsert from callback failed', e?.message || e);
         }

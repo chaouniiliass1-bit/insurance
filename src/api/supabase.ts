@@ -440,7 +440,7 @@ export const supabaseApi = {
 
       const { data, error } = await supabase
         .from('tracks')
-        .select('id,audio_url,title,mood,genres,liked,created_at,image_url,stream_url,mp3_url')
+        .select('id,audio_url,title,mood,genres,liked,is_favorite,created_at,image_url,stream_url,mp3_url,duration')
         .eq('profile_id', profile_id)
         .order('created_at', { ascending: false });
       if (error) { logRequest('error', { method: 'SELECT', error: String(error?.message || error) }); return { ok: false, status: 400, data: error.message }; }
@@ -452,6 +452,23 @@ export const supabaseApi = {
       return { ok: true, data: normalized };
     } catch (e: any) {
       logRequest('error', { method: 'SELECT', error: String(e?.message || e) });
+      return { ok: false };
+    }
+  },
+  listFavoriteTracksByProfileId: async (profile_id: string) => {
+    try {
+      const base = getApiBase();
+      if (!base) return { ok: false, status: 0, data: 'api_base_missing' };
+      const resp = await fetch(`${base}/supabase/tracks/favorites/by-profile?profile_id=${encodeURIComponent(profile_id)}`, { headers: TUNNEL_BYPASS_HEADER });
+      const data = await parseJsonResponse(resp, 'tracks/favorites/by-profile');
+      if (!resp.ok) return { ok: false, status: resp.status, data };
+      const normalized = Array.isArray(data) ? data.map((r: any) => ({
+        ...r,
+        genres: typeof r?.genres === 'string' && r.genres.length ? r.genres.split(',').map((s: string) => s.trim()).filter(Boolean) : [],
+      })) : [];
+      return { ok: true, data: normalized };
+    } catch (e: any) {
+      logRequest('error', { method: 'SELECT_FAVORITES_PROXY', error: String(e?.message || e) });
       return { ok: false };
     }
   },

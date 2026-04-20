@@ -29,11 +29,13 @@ export default function FavoritesScreen() {
         if (profileId) lastProfileIdRef.current = String(profileId);
         const effectiveProfileId = profileId || lastProfileIdRef.current;
         if (effectiveProfileId) {
-          const resp = await supabaseApi.listTracksByProfileId(effectiveProfileId);
+          const resp = (supabaseApi as any).listFavoriteTracksByProfileId
+            ? await (supabaseApi as any).listFavoriteTracksByProfileId(effectiveProfileId)
+            : await supabaseApi.listTracksByProfileId(effectiveProfileId);
           if ((resp as any)?.ok && Array.isArray((resp as any)?.data)) {
             const rows = (resp as any).data as any[];
             const favs: FavItem[] = rows
-              .filter((r) => typeof r?.liked === 'boolean' && r.liked)
+              .filter((r) => (typeof r?.is_favorite === 'boolean' ? r.is_favorite : (typeof r?.liked === 'boolean' && r.liked)))
               .map((r) => {
                 const audio = typeof r?.audio_url === 'string' ? r.audio_url : null;
                 const mp3 = typeof r?.mp3_url === 'string' ? r.mp3_url : null;
@@ -85,11 +87,13 @@ export default function FavoritesScreen() {
     try {
       const effectiveProfileId = profileId || lastProfileIdRef.current;
       if (effectiveProfileId) {
-        const resp = await supabaseApi.listTracksByProfileId(effectiveProfileId);
+        const resp = (supabaseApi as any).listFavoriteTracksByProfileId
+          ? await (supabaseApi as any).listFavoriteTracksByProfileId(effectiveProfileId)
+          : await supabaseApi.listTracksByProfileId(effectiveProfileId);
         if ((resp as any)?.ok && Array.isArray((resp as any)?.data)) {
           const rows = (resp as any).data as any[];
           const favs: FavItem[] = rows
-            .filter((r) => typeof r?.liked === 'boolean' && r.liked)
+            .filter((r) => (typeof r?.is_favorite === 'boolean' ? r.is_favorite : (typeof r?.liked === 'boolean' && r.liked)))
             .map((r) => {
               const audio = typeof r?.audio_url === 'string' ? r.audio_url : null;
               const mp3 = typeof r?.mp3_url === 'string' ? r.mp3_url : null;

@@ -38,6 +38,7 @@ type HistItem = {
   mp3_url?: string | null;
   stream_url?: string | null;
   title?: string | null;
+  duration?: number | null;
   created_at?: string;
 };
 
@@ -69,6 +70,13 @@ export default function LibraryScreen() {
     if (!trimmed) return null;
     return trimmed.startsWith('http://') ? `https://${trimmed.slice('http://'.length)}` : trimmed;
   };
+  const formatDuration = (sec: number | null | undefined): string | null => {
+    if (typeof sec !== 'number' || !Number.isFinite(sec) || sec <= 0) return null;
+    const total = Math.max(0, Math.floor(sec));
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
 
   const mapRowsToItems = (rows: any[]): HistItem[] => {
     const sorted = Array.isArray(rows) ? rows.slice() : [];
@@ -97,7 +105,8 @@ export default function LibraryScreen() {
         title: typeof r?.title === 'string' && r.title.length ? r.title : null,
         mood: typeof r?.mood === 'string' ? r.mood : null,
         genres: normalizeGenres(r?.genres),
-        liked: typeof r?.liked === 'boolean' ? r.liked : null,
+        liked: typeof r?.is_favorite === 'boolean' ? r.is_favorite : (typeof r?.liked === 'boolean' ? r.liked : null),
+        duration: typeof r?.duration === 'number' && Number.isFinite(r.duration) && r.duration > 0 ? r.duration : null,
         created_at: typeof r?.created_at === 'string' ? r.created_at : undefined,
       });
     }
@@ -300,6 +309,7 @@ export default function LibraryScreen() {
     const isSecuring = !mp3Url || !mp3Url.includes('/storage/v1/object/public/');
     const stableKey = (id || item?.stream_url || audioUrl || title) as string;
     const saveState = downloadState[stableKey] || 'idle';
+    const durText = formatDuration(item?.duration);
     return (
       <Pressable
         style={[styles.listCard, isActive && { borderColor: 'rgba(255, 170, 115, 0.85)', backgroundColor: 'rgba(255,255,255,0.14)' }]}
@@ -327,6 +337,7 @@ export default function LibraryScreen() {
             </Text>
             <View style={styles.tagsRow}>
               {isSecuring && <View style={styles.tag}><Text style={styles.tagText}>Securing…</Text></View>}
+              {!!durText && <View style={styles.tag}><Text style={styles.tagText}>{durText}</Text></View>}
               {!!mood && <View style={styles.tag}><Text style={styles.tagText}>{mood}</Text></View>}
               {genres.slice(0, 2).map((g) => (
                 <View key={g} style={styles.tag}><Text style={styles.tagText}>{g}</Text></View>

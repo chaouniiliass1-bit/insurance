@@ -60,6 +60,12 @@ function normalizeExternalUrl(input) {
   return s;
 }
 
+function isImageUrl(u) {
+  if (typeof u !== 'string') return false;
+  const low = u.toLowerCase();
+  return low.endsWith('.jpg') || low.endsWith('.jpeg') || low.endsWith('.png') || low.endsWith('.gif') || low.endsWith('.webp');
+}
+
 function extractUrlsAllKeys(root) {
   const results = [];
   const visited = new Set();
@@ -81,6 +87,7 @@ function extractUrlsAllKeys(root) {
     const isMp3 = low.endsWith('.mp3');
     const isStreamKey = String(path || '').toLowerCase().includes('stream');
     const isPrimaryStream = low.includes('musicfile.removeai.ai');
+    const isImage = isImageUrl(low);
     results.push({ url: s, path: String(path || ''), index, isMp3, isStreamKey, isPrimaryStream });
   };
   const add = (raw, path) => {
@@ -250,7 +257,7 @@ async function upsertTracksForProfile(profile_id, urls, download_url, title, cov
         image_url: typeof cover === 'string' ? cover : null,
       };
       const dl = Array.isArray(download_url) ? download_url[i] : download_url;
-      if (typeof dl === 'string' && dl.startsWith('http')) row.mp3_url = dl;
+      if (typeof dl === 'string' && dl.startsWith('http') && dl.toLowerCase().endsWith('.mp3')) row.mp3_url = dl;
       const existing = await supabaseAdmin.from('tracks').select('id').eq('profile_id', pid).eq('audio_url', u).limit(1);
       const id = Array.isArray(existing?.data) && existing.data[0]?.id ? existing.data[0].id : null;
       if (id) await supabaseAdmin.from('tracks').update(row).eq('id', id);
@@ -432,7 +439,9 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
             }
             continue;
           }
-          if (entry.isPrimaryStream || entry.isStreamKey || entry.url.toLowerCase().includes('removeai.ai')) {
+          const low = String(entry.url || '').toLowerCase();
+          if (isImageUrl(low)) continue;
+          if (entry.isPrimaryStream || entry.isStreamKey || (low.includes('removeai.ai') && !low.endsWith('.mp3'))) {
             if (idx != null) {
               if (!streamByIndex[idx] || entry.isPrimaryStream) streamByIndex[idx] = entry.url;
             } else {
@@ -1142,7 +1151,19 @@ app.get('/supabase/tracks/by-profile', async (req, res) => {
     if (logCriticalIfSupabaseHtml(resp.data, 'GET /supabase/tracks/by-profile')) {
       return res.status(500).json({ error: 'Supabase base URL misconfigured' });
     }
-    return res.status(resp.status || 200).json(resp.data);
+    const rows = Array.isArray(resp.data) ? resp.data : [];
+    const seen = new Set();
+    const unique = [];
+    for (const r of rows) {
+      const au = typeof r?.audio_url === 'string' ? r.audio_url.trim() : '';
+      const su = typeof r?.stream_url === 'string' ? r.stream_url.trim() : '';
+      const key = au || su;
+      if (!key) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(r);
+    }
+    return res.status(resp.status || 200).json(unique);
   } catch (e) {
     const status = e?.response?.status || 500;
     const data = e?.response?.data || { error: 'Supabase tracks list error' };

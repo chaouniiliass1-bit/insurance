@@ -1,6 +1,8 @@
 import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 
 export const TUNNEL_BYPASS_HEADER = { 'Bypass-Tunnel-Reminder': 'true' } as const;
+export const PRODUCTION_BACKEND_BASE = 'https://insurance-production-6074.up.railway.app';
 
 function readApiUrlFromExpo(): string {
   try {
@@ -26,8 +28,56 @@ export function withTunnelBypassHeaders(headers?: Record<string, string>): Recor
   return { ...(headers || {}), ...TUNNEL_BYPASS_HEADER };
 }
 
+function extractHost(input: string): string {
+  const s = String(input || '').trim();
+  if (!s) return '';
+  try {
+    if (s.includes('://')) return new URL(s).hostname;
+  } catch {}
+  const noProto = s.replace(/^exp:\/\//, '').replace(/^https?:\/\//, '');
+  const beforeSlash = noProto.split('/')[0] || '';
+  const host = beforeSlash.split(':')[0] || '';
+  return host.trim();
+}
+
+function inferDevHost(): string {
+  const candidates: Array<any> = [
+    (Constants as any)?.expoConfig?.hostUri,
+    (Constants as any)?.manifest?.debuggerHost,
+    (Constants as any)?.manifest2?.extra?.expoClient?.hostUri,
+    (Constants as any)?.expoGoConfig?.debuggerHost,
+  ];
+  for (const c of candidates) {
+    const host = typeof c === 'string' ? extractHost(c) : '';
+    if (host) return host;
+  }
+  return '';
+}
+
 export function getApiBase(): string {
-  return readApiUrlFromExpo();
+  if (Platform.OS !== 'web') return PRODUCTION_BACKEND_BASE;
+  const v = readApiUrlFromExpo();
+  if (v) {
+    if (Platform.OS !== 'web' && isLocalHost(v)) {
+      const host = inferDevHost();
+      if (host) return `http://${host}:8788`;
+    }
+    return v;
+  }
+  if (Platform.OS === 'web') {
+    try {
+      const w = (globalThis as any)?.window;
+      const host = typeof w?.location?.hostname === 'string' ? w.location.hostname : '';
+      const proto = typeof w?.location?.protocol === 'string' ? w.location.protocol : '';
+      if (host) {
+        const scheme = proto === 'https:' ? 'https' : 'http';
+        return `${scheme}://${host}:8788`;
+      }
+    } catch {}
+    return '';
+  }
+  const host = inferDevHost();
+  return host ? `http://${host}:8788` : '';
 }
 
 export function requireApiBase(): string {

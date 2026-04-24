@@ -11,7 +11,7 @@ import ProfileModal from '../components/ProfileModal';
 import AppHeader from '../components/AppHeader';
 import * as Haptics from 'expo-haptics';
 
-type FavItem = { id?: string | null; audio_url: string; mp3_url?: string | null; image_url?: string | null; title?: string | null; mood?: string | null; genres?: string[] | null; liked?: boolean };
+type FavItem = { id?: string | null; audio_url: string; mp3_url?: string | null; stream_url?: string | null; image_url?: string | null; title?: string | null; mood?: string | null; genres?: string[] | null; liked?: boolean; duration?: number | null };
 
 export default function FavoritesScreen() {
   const { playUrl, profileId, profile } = useAppState() as any;
@@ -35,20 +35,23 @@ export default function FavoritesScreen() {
           if ((resp as any)?.ok && Array.isArray((resp as any)?.data)) {
             const rows = (resp as any).data as any[];
             const favs: FavItem[] = rows
-              .filter((r) => (typeof r?.is_favorite === 'boolean' ? r.is_favorite : (typeof r?.liked === 'boolean' && r.liked)))
+              .filter((r) => typeof r?.liked === 'boolean' && r.liked)
               .map((r) => {
                 const audio = typeof r?.audio_url === 'string' ? r.audio_url : null;
                 const mp3 = typeof r?.mp3_url === 'string' ? r.mp3_url : null;
-                const primary = audio || mp3;
+                const stream = typeof r?.stream_url === 'string' ? r.stream_url : null;
+                const primary = mp3 || audio || stream;
                 return {
                   id: r?.id != null ? String(r.id) : null,
                   audio_url: primary || '',
                   mp3_url: mp3 ?? null,
+                  stream_url: stream ?? null,
                   image_url: r?.image_url ?? null,
                   title: r?.title ?? null,
                   mood: r?.mood ?? null,
                   genres: Array.isArray(r?.genres) ? r.genres : [],
                   liked: true,
+                  duration: typeof r?.duration === 'number' && Number.isFinite(r.duration) && r.duration > 0 ? r.duration : null,
                 };
               })
               .filter((it) => typeof it.audio_url === 'string' && it.audio_url.length);
@@ -93,20 +96,23 @@ export default function FavoritesScreen() {
         if ((resp as any)?.ok && Array.isArray((resp as any)?.data)) {
           const rows = (resp as any).data as any[];
           const favs: FavItem[] = rows
-            .filter((r) => (typeof r?.is_favorite === 'boolean' ? r.is_favorite : (typeof r?.liked === 'boolean' && r.liked)))
+            .filter((r) => typeof r?.liked === 'boolean' && r.liked)
             .map((r) => {
               const audio = typeof r?.audio_url === 'string' ? r.audio_url : null;
               const mp3 = typeof r?.mp3_url === 'string' ? r.mp3_url : null;
-              const primary = audio || mp3;
+              const stream = typeof r?.stream_url === 'string' ? r.stream_url : null;
+              const primary = mp3 || audio || stream;
               return {
                 id: r?.id != null ? String(r.id) : null,
                 audio_url: primary || '',
                 mp3_url: mp3 ?? null,
+                stream_url: stream ?? null,
                 image_url: r?.image_url ?? null,
                 title: r?.title ?? null,
                 mood: r?.mood ?? null,
                 genres: Array.isArray(r?.genres) ? r.genres : [],
                 liked: true,
+                duration: typeof r?.duration === 'number' && Number.isFinite(r.duration) && r.duration > 0 ? r.duration : null,
               };
             })
             .filter((it) => typeof it.audio_url === 'string' && it.audio_url.length);
@@ -120,9 +126,9 @@ export default function FavoritesScreen() {
   const renderItem = ({ item }: { item: FavItem }) => {
     const cover = typeof item.image_url === 'string' && item.image_url.startsWith('http') ? item.image_url : (item.mood ? MoodImages[item.mood] : MoodImages.Default);
     const mp3 = typeof item.mp3_url === 'string' && item.mp3_url.startsWith('http') ? item.mp3_url : null;
-    const playback = mp3 || item.audio_url;
+    // Strict MP3 Playback: Only play from the master mp3 in Favorites.
+    const playback = mp3;
     const key = String(item.id || item.mp3_url || item.audio_url);
-    const isSecuring = !mp3 || !mp3.includes('/storage/v1/object/public/');
     return (
       <Pressable
         style={styles.card}
@@ -130,13 +136,12 @@ export default function FavoritesScreen() {
           void (async () => {
             try { await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
             if (!playback) {
-              Alert.alert('Track unavailable', 'This favorite is missing a playable audio link.');
+              Alert.alert('High Quality Crafting', 'The track is still being crafted in high quality. Please wait a moment.');
               return;
             }
             setBufferingKey(key);
             try {
-              const fallback = mp3 ? (item.audio_url || null) : null;
-              await playUrl(playback, item.title ?? null, item.image_url ?? null, item.id ?? null, true, fallback);
+              await playUrl(playback, item.title ?? null, cover, item.id ?? null, true, null, item.duration ?? null);
             } catch {}
             setBufferingKey(null);
           })();
@@ -145,7 +150,7 @@ export default function FavoritesScreen() {
         <Image source={{ uri: cover }} style={styles.cover} />
         <View style={styles.meta}>
           <Text style={styles.title}>{item.title || 'Untitled'}</Text>
-          <Text style={styles.subtitle}>{[isSecuring ? 'Securing…' : null, item.mood, ...(item.genres || [])].filter(Boolean).join(' • ')}</Text>
+          <Text style={styles.subtitle}>{[item.mood, ...(item.genres || [])].filter(Boolean).join(' • ')}</Text>
         </View>
         <View style={styles.playBtn}>
           {bufferingKey === key ? (
@@ -169,7 +174,7 @@ export default function FavoritesScreen() {
         ) : (
           <FlatList
             data={items}
-            keyExtractor={(it) => it.audio_url}
+            keyExtractor={(it) => String(it.id || it.audio_url)}
             renderItem={renderItem}
             contentContainerStyle={{ paddingBottom: 40, paddingTop: 24 }}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#fff" />}

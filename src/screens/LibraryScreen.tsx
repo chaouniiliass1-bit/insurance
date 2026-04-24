@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, RefreshControl, View, Text, StyleSheet, Pressable, FlatList, Alert, Platform, Linking } from 'react-native';
+import { ActivityIndicator, RefreshControl, View, Text, StyleSheet, Pressable, FlatList, Alert, Platform, Linking, Image } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useIsFocused } from '@react-navigation/native';
 import { goBack } from '../navigation';
 import GradientBackground from '../components/GradientBackground';
 import { useAppState } from '../context/AppState';
@@ -53,6 +54,7 @@ export default function LibraryScreen() {
   const [bufferingKey, setBufferingKey] = useState<string | null>(null);
   const doneTimersRef = useRef<Record<string, ReturnType<typeof setTimeout> | null>>({});
   const lastProfileIdRef = useRef<string | null>(null);
+  const isFocused = useIsFocused();
   // Removed MiniPlayer: play directly on main Player
 
   const normalizeGenres = (g: any): string[] => (Array.isArray(g) ? g.map((s) => String(s)).filter(Boolean) : []);
@@ -64,10 +66,15 @@ export default function LibraryScreen() {
     const c = row?.mp3_url;
     return typeof c === 'string' && c.trim().length && c.startsWith('http') ? c.trim() : null;
   };
+  const pickStreamUrl = (row: any): string | null => {
+    const c = row?.stream_url;
+    return typeof c === 'string' && c.trim().length && c.startsWith('http') ? c.trim() : null;
+  };
   const normalizeTapUrl = (u: string | null): string | null => {
     if (!u) return null;
-    const trimmed = u.trim();
+    const trimmed = u.trim().replace(/[`"'“”]/g, '').trim().replace(/[.)]+$/, '');
     if (!trimmed) return null;
+    if (trimmed.startsWith('//')) return `https:${trimmed}`;
     return trimmed.startsWith('http://') ? `https://${trimmed.slice('http://'.length)}` : trimmed;
   };
   const formatDuration = (sec: number | null | undefined): string | null => {
@@ -90,25 +97,26 @@ export default function LibraryScreen() {
     for (const r of sorted) {
       const audio = pickAudioUrl(r);
       const mp3 = pickMp3Url(r);
-      const primary = audio || mp3;
+      const stream = pickStreamUrl(r);
+      const primary = audio || mp3 || stream;
       if (!primary) continue;
       const id = r?.id != null ? String(r.id) : null;
       const key = id || primary;
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({
-        id,
-        audio_url: audio || mp3,
-        mp3_url: mp3,
-        stream_url: typeof r?.stream_url === 'string' && r.stream_url.startsWith('http') ? r.stream_url : null,
-        image_url: typeof r?.image_url === 'string' ? r.image_url : null,
-        title: typeof r?.title === 'string' && r.title.length ? r.title : null,
-        mood: typeof r?.mood === 'string' ? r.mood : null,
-        genres: normalizeGenres(r?.genres),
-        liked: typeof r?.is_favorite === 'boolean' ? r.is_favorite : (typeof r?.liked === 'boolean' ? r.liked : null),
-        duration: typeof r?.duration === 'number' && Number.isFinite(r.duration) && r.duration > 0 ? r.duration : null,
-        created_at: typeof r?.created_at === 'string' ? r.created_at : undefined,
-      });
+        out.push({
+          id,
+          audio_url: audio || mp3 || stream,
+          mp3_url: mp3,
+          stream_url: stream,
+          image_url: typeof r?.image_url === 'string' ? r.image_url : null,
+          title: typeof r?.title === 'string' && r.title.length ? r.title : null,
+          mood: typeof r?.mood === 'string' ? r.mood : null,
+          genres: normalizeGenres(r?.genres),
+          liked: typeof r?.liked === 'boolean' ? r.liked : null,
+          duration: typeof r?.duration === 'number' && Number.isFinite(r.duration) && r.duration > 0 ? r.duration : null,
+          created_at: typeof r?.created_at === 'string' ? r.created_at : undefined,
+        } as any);
     }
     return out;
   };
@@ -149,7 +157,7 @@ export default function LibraryScreen() {
             genres: Array.isArray(rec?.genres) ? rec.genres : [],
             liked: typeof rec?.first?.liked === 'boolean' ? rec.first.liked : null,
             created_at: createdAt,
-          });
+          } as any);
         }
         const secondAudio = typeof rec?.second?.audio_url === 'string' ? rec.second.audio_url : null;
         if (secondAudio) {
@@ -164,7 +172,7 @@ export default function LibraryScreen() {
             genres: Array.isArray(rec?.genres) ? rec.genres : [],
             liked: typeof rec?.second?.liked === 'boolean' ? rec.second.liked : null,
             created_at: createdAt,
-          });
+          } as any);
         }
       }
       return local;
@@ -211,7 +219,7 @@ export default function LibraryScreen() {
       } catch {}
       setLoading(false);
     })();
-  }, [profileId]);
+  }, [profileId, isFocused]);
 
   const onRefresh = async () => {
     if (refreshing) return;
@@ -304,9 +312,9 @@ export default function LibraryScreen() {
     const coverUrl = normalizeTapUrl(item?.image_url || null);
     const mp3Url = normalizeTapUrl(item?.mp3_url || null);
     const streamUrl = normalizeTapUrl(item?.stream_url || null);
-    const playbackUrl = streamUrl || audioUrl || mp3Url;
+    // Strict MP3 Playback: Only play from mp3_url in the Library.
+    const playbackUrl = mp3Url;
     const isActive = !!trackUrl && trackUrl === playbackUrl;
-    const isSecuring = !mp3Url || !mp3Url.includes('/storage/v1/object/public/');
     const stableKey = (id || item?.stream_url || audioUrl || title) as string;
     const saveState = downloadState[stableKey] || 'idle';
     const durText = formatDuration(item?.duration);
@@ -315,28 +323,26 @@ export default function LibraryScreen() {
         style={[styles.listCard, isActive && { borderColor: 'rgba(255, 170, 115, 0.85)', backgroundColor: 'rgba(255,255,255,0.14)' }]}
         onPress={() => {
           if (!playbackUrl) {
-            Alert.alert('Track unavailable', 'This saved vibe is missing a playable audio link.');
+            Alert.alert('High Quality Crafting', 'The track is still being crafted in high quality. Please wait a moment.');
             return;
           }
           void (async () => {
             try { await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
             setBufferingKey(stableKey);
             try {
-              const primary = playbackUrl;
-              const fallback = playbackUrl !== mp3Url ? (mp3Url || null) : null;
-              await playUrl(primary, title, coverUrl, id, liked, fallback);
+              await playUrl(playbackUrl, title, coverUrl, id, liked, null, item?.duration ?? null);
             } catch {}
             setBufferingKey(null);
           })();
         }}
       >
         <View style={styles.listRow}>
+          {!!coverUrl && <Image source={{ uri: coverUrl }} style={styles.coverSmall} />}
           <View style={styles.listMeta}>
             <Text style={styles.listTitle} numberOfLines={1}>
               {title}
             </Text>
             <View style={styles.tagsRow}>
-              {isSecuring && <View style={styles.tag}><Text style={styles.tagText}>Securing…</Text></View>}
               {!!durText && <View style={styles.tag}><Text style={styles.tagText}>{durText}</Text></View>}
               {!!mood && <View style={styles.tag}><Text style={styles.tagText}>{mood}</Text></View>}
               {genres.slice(0, 2).map((g) => (
@@ -383,12 +389,12 @@ export default function LibraryScreen() {
               />
             </Pressable>
             <Pressable
-              style={styles.saveBtn}
+              style={[styles.saveBtn, !mp3Url && { opacity: 0.5 }]}
               onPress={(e: any) => {
                 try { e?.stopPropagation?.(); } catch {}
                 const list = [mp3Url].filter(Boolean) as string[];
                 if (!list.length) {
-                  Alert.alert('Download unavailable', 'This track is still syncing. Try again in a moment.');
+                  Alert.alert('Processing High Quality...', 'The high-quality MP3 for this track is still being mastered. Please try again in a few seconds.');
                   return;
                 }
                 void doDownload(list, title, stableKey);
@@ -443,7 +449,7 @@ export default function LibraryScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, paddingTop: 10, paddingHorizontal: 16 },
-  header: { color: '#f8f5f0', fontSize: 20, fontWeight: '700', textAlign: 'center', marginTop: 18 },
+  header: { color: '#f8f5f0', fontSize: 20, fontWeight: '700', textAlign: 'center', marginTop: 18, marginBottom: 8 },
   loading: { color: '#fff', textAlign: 'center' },
   card: {
     flexDirection: 'row',
@@ -478,4 +484,5 @@ const styles = StyleSheet.create({
   playBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.28)' },
   playText: { color: '#1b1b1b', fontWeight: '700' },
   iconBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.28)' },
+  coverSmall: { width: 42, height: 42, borderRadius: 8, marginRight: 4 },
 });

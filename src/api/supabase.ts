@@ -440,10 +440,12 @@ export const supabaseApi = {
 
       const { data, error } = await supabase
         .from('tracks')
-        .select('id,audio_url,title,mood,genres,liked,is_favorite,created_at,image_url,stream_url,mp3_url,duration')
+        .select('id,audio_url,title,mood,genres,liked,created_at,image_url,stream_url,mp3_url,duration')
         .eq('profile_id', profile_id)
         .order('created_at', { ascending: false });
+
       if (error) { logRequest('error', { method: 'SELECT', error: String(error?.message || error) }); return { ok: false, status: 400, data: error.message }; }
+      
       const normalized = Array.isArray(data) ? data.map((r: any) => ({
         ...r,
         genres: typeof r?.genres === 'string' && r.genres.length ? r.genres.split(',').map((s: string) => s.trim()).filter(Boolean) : [],

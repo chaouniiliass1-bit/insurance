@@ -84,7 +84,7 @@ function isPreferredMp3Url(u) {
   if (low.includes('removeai.ai')) return false;
   try {
     const host = new URL(s).hostname.toLowerCase();
-    return host.includes('tempfile.aiquickdraw.com') || host === 'cdn1.suno.ai';
+    return host.includes('tempfile.aiquickdraw.com');
   } catch {
     return false;
   }
@@ -1661,57 +1661,17 @@ app.all('/supabase/*', async (req, res) => {
         return '';
       }
     })();
-    const normalizedQs = (() => {
-      try {
-        const isTracks = suffix === 'tracks' || suffix.startsWith('tracks?') || suffix.startsWith('tracks/');
-        if (!isTracks || !qs) return qs;
-        const params = new URLSearchParams(qs.startsWith('?') ? qs.slice(1) : qs);
-        const sel = params.get('select');
-        if (typeof sel === 'string' && sel.includes('is_favorite')) {
-          const next = sel
-            .split(',')
-            .map((s) => s.trim())
-            .filter((s) => s && s !== 'is_favorite')
-            .join(',');
-          params.set('select', next);
-        }
-        const favFilters = params.getAll('is_favorite');
-        if (favFilters.length) {
-          params.delete('is_favorite');
-          for (const v of favFilters) params.append('liked', v);
-        }
-        return `?${params.toString()}`;
-      } catch {
-        return qs;
-      }
-    })();
-    const target = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/${suffix}${normalizedQs}`;
+    const target = `${SUPABASE_URL.replace(/\/$/, '')}/rest/v1/${suffix}${qs}`;
     const headers = { ...supabaseHeaders() };
     delete headers['Content-Type'];
     if (method !== 'GET' && method !== 'HEAD') {
       headers['Content-Type'] = req.headers['content-type'] || 'application/json';
     }
-    const body =
-      method === 'GET' || method === 'HEAD'
-        ? undefined
-        : (() => {
-            try {
-              const isTracks = suffix === 'tracks' || suffix.startsWith('tracks?') || suffix.startsWith('tracks/');
-              if (!isTracks) return req.body;
-              if (!req.body || typeof req.body !== 'object') return req.body;
-              if (!('is_favorite' in req.body)) return req.body;
-              const next = { ...req.body };
-              delete next.is_favorite;
-              return next;
-            } catch {
-              return req.body;
-            }
-          })();
     const resp = await axios.request({
       method,
       url: target,
       headers,
-      data: body,
+      data: method === 'GET' || method === 'HEAD' ? undefined : req.body,
       timeout: 12000,
       validateStatus: () => true,
     });

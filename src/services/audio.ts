@@ -73,14 +73,26 @@ class AudioService {
       try { await TrackPlayer.reset(); } catch {}
       return;
     }
+    const tasks: Array<Promise<any>> = [];
     try {
       if (this.sound) {
-        try { await this.sound.stopAsync(); } catch {}
-        try { await this.sound.unloadAsync(); } catch {}
+        tasks.push(this.sound.stopAsync().catch(() => undefined));
+        tasks.push(this.sound.unloadAsync().catch(() => undefined));
       }
     } catch {}
-    try { if (this.nextSound) { try { await this.nextSound.stopAsync(); } catch {}; try { await this.nextSound.unloadAsync(); } catch {} } } catch {}
-    try { if (this.prevSound) { try { await this.prevSound.stopAsync(); } catch {}; try { await this.prevSound.unloadAsync(); } catch {} } } catch {}
+    try {
+      if (this.nextSound) {
+        tasks.push(this.nextSound.stopAsync().catch(() => undefined));
+        tasks.push(this.nextSound.unloadAsync().catch(() => undefined));
+      }
+    } catch {}
+    try {
+      if (this.prevSound) {
+        tasks.push(this.prevSound.stopAsync().catch(() => undefined));
+        tasks.push(this.prevSound.unloadAsync().catch(() => undefined));
+      }
+    } catch {}
+    try { await Promise.allSettled(tasks); } catch {}
 
     this.sound = null;
     this.nextSound = null;
@@ -155,6 +167,24 @@ class AudioService {
     // Do not exceed two tracks per generation; keep existing current track
     const combined = [...this.queue, ...urls];
     this.queue = combined.slice(0, 2);
+  }
+
+  // Update the metadata for the currently playing track (TrackPlayer only).
+  async updateMetadata(meta: { title?: string | null; artist?: string | null; artwork?: string | null; titles?: Array<string | null> | null }) {
+    if (this.useTP) {
+      try {
+        const title = typeof meta?.title === 'string' && meta.title.trim().length ? meta.title.trim() : 'MoodFusion';
+        const artist = typeof meta?.artist === 'string' && meta.artist.trim().length ? meta.artist.trim() : 'MoodFusion';
+        const artwork = typeof meta?.artwork === 'string' && meta.artwork.trim().length ? meta.artwork.trim() : undefined;
+        
+        // TrackPlayer.updateNowPlaying is often used for this
+        if (TrackPlayer.updateNowPlayingMetadata) {
+          await TrackPlayer.updateNowPlayingMetadata({ title, artist, artwork });
+        }
+      } catch (e) {
+        console.warn('[Audio] updateMetadata failed', e);
+      }
+    }
   }
 
   async load(url?: string) {

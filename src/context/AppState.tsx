@@ -8,6 +8,7 @@ import { supabaseApi } from '../api/supabase';
 import { navigate, navigationRef } from '../navigation';
 import Constants from 'expo-constants';
 import { useKeepAwake } from 'expo-keep-awake';
+import { PRODUCTION_BACKEND_BASE } from '../api/base';
 
   type AppState = {
   deviceId: string | null;
@@ -53,7 +54,7 @@ import { useKeepAwake } from 'expo-keep-awake';
   setMood: (mood: string) => Promise<void> | void;
   setGenres: (g1: string, g2: string) => Promise<void> | void;
   generateTrack: (mood?: string, genre1?: string, genre2?: string) => Promise<void>;
-  playUrl: (url: string, title?: string | null, coverUrl?: string | null, trackId?: string | null, liked?: boolean | null, fallbackUrl?: string | null) => Promise<void>;
+  playUrl: (url: string, title?: string | null, coverUrl?: string | null, trackId?: string | null, liked?: boolean | null, fallbackUrl?: string | null, durationSeconds?: number | null) => Promise<void>;
   playPair: (firstUrl: string, secondUrl?: string | null, title?: string | null, mood?: string | null, genres?: string[] | null, coverFirst?: string | null, coverSecond?: string | null, trackIdA?: string | null, trackIdB?: string | null, likedA?: boolean | null, likedB?: boolean | null) => Promise<void>;
   // Saved-match helpers: check and play pre-generated track without requesting
   hasSavedMatch: (mood: string, g1: string, g2: string) => Promise<boolean>;
@@ -417,6 +418,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         const n = normalizeBase(u);
         if (n) list.push(n);
       };
+      if (Platform.OS !== 'web') add(PRODUCTION_BACKEND_BASE);
       add(envUrl);
       add(cfgUrl);
       return Array.from(new Set(list));
@@ -508,12 +510,22 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       client.on('suno:status', (evt: any) => {
         try { console.log('[Client] suno:status', evt); } catch {}
         const st = String(evt?.status || '').toLowerCase();
+        const tid = evt?.task_id ? String(evt.task_id) : null;
+        
+        // If we are currently playing this task, only show status if it's not a background update
+        const isCurrentlyPlayingTask = hasStartedPlaybackRef.current && currentTaskIdRef.current === tid;
+        
         if (st === 'success') {
           setStatusLabel('');
           return;
         }
         const message = typeof evt?.message === 'string' ? evt.message : null;
         if (isGeneratingRef.current && message) {
+          // If we are already playing the track, don't show "Finalizing" or "Mastering" 
+          // to avoid cluttered UI while the user listens.
+          if (isCurrentlyPlayingTask && (st === 'cooking' || st === 'still_cooking')) {
+            return;
+          }
           setStatusLabel(message);
         }
       });
@@ -629,6 +641,16 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
               currentTaskIdRef.current = tid;
             }
           }
+          
+          // IDENTIFY SILENT UPGRADE: 
+          // If we are already playing a track from this same task_id, we update the master URLs 
+          // and metadata in the background without restarting the player.
+          const isSilentUpgrade = 
+            tid && 
+            currentTaskIdRef.current === tid && 
+            hasStartedPlaybackRef.current && 
+            (cbType === 'complete' || cbType === 'poll');
+
           const alreadyPlayingSame =
             hasStartedPlaybackRef.current && currentTrackUrlRef.current === primaryA;
 
@@ -638,9 +660,15 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           setTrackTitle(titleA);
           setTrackA(primaryA);
           setTrackB(primaryB);
-          setTrackUrl(primaryA);
+          // If it's a silent upgrade, we keep the existing currentTrackUrl so the audio service doesn't glitch
+          if (!isSilentUpgrade) {
+            setTrackUrl(primaryA);
+          }
           setTrackCoverA(coverA);
           setTrackCoverB(coverB);
+          
+          // Background artwork update: if we are currently playing, 
+          // the PlayerScreen will see this change and crossfade silently.
           if (isSecondActiveRef.current) {
             if (coverB) setTrackCover(coverB);
             else if (coverA) setTrackCover(coverA);
@@ -651,7 +679,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           setTrackMp3A(primaryA);
           setTrackMp3B(primaryB);
 
-          if (!alreadyPlayingSame) {
+          if (!alreadyPlayingSame && !isSilentUpgrade) {
             console.log('[Client] Starting playback:', primaryA);
             try {
               await audioService.configure();
@@ -665,6 +693,17 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             } catch (audioErr) {
               console.error('[Client] Playback failed:', audioErr);
             }
+          } else if (isSilentUpgrade) {
+            console.log('[Client] Silent upgrade received for task:', tid);
+            // Just update the queue metadata/artwork in the service if possible, 
+            // but don't reset the session.
+            try {
+              audioService.updateMetadata({ 
+                artwork: coverA ?? null,
+                title: titleA,
+                titles: primaryB ? [titleA, titleB] : [titleA]
+              });
+            } catch {}
           } else if (primaryB && currentTrackBRef.current !== primaryB) {
             console.log('[Client] Second track arrived; preloading for smooth switch');
             try {
@@ -692,6 +731,10 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
 
           // Auto-navigate to Player if not already there
           navigate('Player');
+
+          // Client-side redundancy: Save tracks immediately when they arrive
+          void persistSingleTrack(primaryA, titleA);
+          if (primaryB) void persistSingleTrack(primaryB, titleB || `${titleA} 2`);
 
           // Server is the source of truth for Library rows. Only resolve track IDs for like/history.
           try {
@@ -859,9 +902,11 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     const moodVal = _mood ?? userMood ?? 'Chill';
     const g1Val = _genre1 ?? genre1 ?? 'Lo-Fi';
     const g2Val = _genre2 ?? genre2 ?? 'Jazz';
+    const effectiveProfileId = profileIdRef.current ?? profileId;
+    
     try {
-      console.log('[AppState] Calling generateSunoTrack...');
-      const ack = await generateSunoTrack({ mood: moodVal, genre1: g1Val, genre2: g2Val, vocalMode, profileId: profileIdRef.current ?? profileId }, setGenerationProgress);
+      console.log('[AppState] Calling generateSunoTrack...', { mood: moodVal, profileId: effectiveProfileId });
+      const ack = await generateSunoTrack({ mood: moodVal, genre1: g1Val, genre2: g2Val, vocalMode, profileId: effectiveProfileId }, setGenerationProgress);
       console.log('[AppState] generateSunoTrack response:', ack);
       if (ack?.taskId) {
         currentTaskIdRef.current = ack.taskId;
@@ -941,7 +986,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const persistSingleTrack = async (url: string | null, title?: string | null) => {
     try {
       const pid = profileIdRef.current;
-      if (!pid || !url || !url.startsWith('https://')) return;
+      if (!pid || !url || !url.startsWith('http')) return;
       // Deduplicate per task
       if (insertedUrlsRef.current.has(url)) return;
       insertedUrlsRef.current.add(url);
@@ -956,8 +1001,12 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       });
       if (resp?.ok === false) {
         console.warn('[Supabase][insertTrack] failed', { status: resp?.status, data: resp?.data });
+      } else {
+        console.log('[Supabase][insertTrack] success', { profile_id: pid, audio_url: url });
       }
-    } catch {}
+    } catch (err) {
+      console.error('[Supabase][insertTrack] exception', err);
+    }
   };
 
   // Save current generation pair when ready (complete or both URLs present)
@@ -1137,6 +1186,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         const currentLiked = isA ? trackLikedA : isB ? trackLikedB : (likesMap[url] ?? false);
         const nextLiked = !currentLiked;
 
+        // Optimistic UI: update locally immediately
         if (isA) setTrackLikedA(nextLiked);
         if (isB) setTrackLikedB(nextLiked);
         setLikesMap((prev) => {
@@ -1148,30 +1198,49 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         try {
           if (!profileId) return;
           let trackId = targetId;
-          if (!trackId) {
+          // Ensure we have a valid database UUID
+          const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trackId || '');
+          if (!isUuid) {
             const found = await supabaseApi.findTrackIdByUrl(profileId, url);
             trackId = (found as any)?.data || null;
           }
-          if (!trackId) return;
-          await supabaseApi.updateTrackLiked(trackId, nextLiked);
+          if (!trackId) {
+            console.warn('[Client] Could not resolve DB UUID for like toggle');
+            return;
+          }
+          const resp = await supabaseApi.updateTrackLiked(trackId, nextLiked);
+          if (!resp.ok) throw new Error('Update failed');
+          
           if (nextLiked) {
             await supabaseApi.insertHistory({ profile_id: profileId, track_id: trackId });
           }
-        } catch {}
+        } catch (err) {
+          console.warn('[Client] Toggle like failed, reverting UI', err);
+          // Revert optimistic UI on failure
+          if (isA) setTrackLikedA(currentLiked ?? false);
+          if (isB) setTrackLikedB(currentLiked ?? false);
+          setLikesMap((prev) => ({ ...prev, [url]: !!currentLiked }));
+        }
       },
       setMood,
       setGenres,
       vocalMode,
       setVocalMode,
       generateTrack,
-      playUrl: async (url: string, title?: string | null, coverUrl?: string | null, trackId?: string | null, liked?: boolean | null, fallbackUrl?: string | null) => {
+      playUrl: async (url: string, title?: string | null, coverUrl?: string | null, trackId?: string | null, liked?: boolean | null, fallbackUrl?: string | null, durationSeconds?: number | null) => {
         try {
           const playable = normalizePlayableUrl(url);
           if (!playable) return;
           const fallback = normalizePlayableUrl(fallbackUrl);
           const cover = normalizePlayableUrl(coverUrl);
+          const prefilledMs =
+            typeof durationSeconds === 'number' && Number.isFinite(durationSeconds) && durationSeconds > 0
+              ? Math.floor(durationSeconds * 1000)
+              : 0;
           try { await audioService.configure(); } catch {}
           try { await audioService.resetSession(); } catch {}
+          setPlaybackPositionMillis(0);
+          if (prefilledMs > 0) setPlaybackDurationMillis(prefilledMs);
           setTrackUrl(playable);
           setTrackA(playable);
           setTrackTitle(title ?? null);

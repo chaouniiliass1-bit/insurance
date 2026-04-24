@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, RefreshControl, View, Text, StyleSheet, Pressable, Image, FlatList, Alert } from 'react-native';
+import { ActivityIndicator, RefreshControl, View, Text, StyleSheet, Pressable, Image, FlatList, Alert, Platform, ToastAndroid } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { goBack } from '../navigation';
@@ -126,8 +126,9 @@ export default function FavoritesScreen() {
   const renderItem = ({ item }: { item: FavItem }) => {
     const cover = typeof item.image_url === 'string' && item.image_url.startsWith('http') ? item.image_url : (item.mood ? MoodImages[item.mood] : MoodImages.Default);
     const mp3 = typeof item.mp3_url === 'string' && item.mp3_url.startsWith('http') ? item.mp3_url : null;
-    // Strict MP3 Playback: Only play from the master mp3 in Favorites.
-    const playback = mp3;
+    const stream = typeof item.stream_url === 'string' && item.stream_url.startsWith('http') ? item.stream_url : (typeof item.audio_url === 'string' && item.audio_url.startsWith('http') ? item.audio_url : null);
+    const playback = mp3 || stream;
+    const playbackFallback = mp3 ? stream : null;
     const key = String(item.id || item.mp3_url || item.audio_url);
     return (
       <Pressable
@@ -139,9 +140,15 @@ export default function FavoritesScreen() {
               Alert.alert('High Quality Crafting', 'The track is still being crafted in high quality. Please wait a moment.');
               return;
             }
+            if (!mp3 && stream) {
+              try {
+                if (Platform.OS === 'android') ToastAndroid.show('High-quality master is still processing. Playing preview…', ToastAndroid.SHORT);
+                else Alert.alert('High Quality Crafting', 'High-quality master is still processing. Playing preview…');
+              } catch {}
+            }
             setBufferingKey(key);
             try {
-              await playUrl(playback, item.title ?? null, cover, item.id ?? null, true, null, item.duration ?? null);
+              await playUrl(playback, item.title ?? null, cover, item.id ?? null, true, playbackFallback, item.duration ?? null);
             } catch {}
             setBufferingKey(null);
           })();

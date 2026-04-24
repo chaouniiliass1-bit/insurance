@@ -95,8 +95,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [trackCover, setTrackCover] = useState<string | null>(null);
   const [trackCoverA, setTrackCoverA] = useState<string | null>(null);
   const [trackCoverB, setTrackCoverB] = useState<string | null>(null);
-  const [trackMp3A, setTrackMp3A] = useState<string | null>(null);
-  const [trackMp3B, setTrackMp3B] = useState<string | null>(null);
+  const [trackMp3A, setTrackMp3A] = useState<string>('');
+  const [trackMp3B, setTrackMp3B] = useState<string>('');
   const [trackIdA, setTrackIdA] = useState<string | null>(null);
   const [trackIdB, setTrackIdB] = useState<string | null>(null);
   const [trackLikedA, setTrackLikedA] = useState<boolean | null>(null);
@@ -158,8 +158,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const isSecondActiveRef = useRef<boolean>(false);
   const trackCoverARef = useRef<string | null>(null);
   const trackCoverBRef = useRef<string | null>(null);
-  const trackMp3ARef = useRef<string | null>(null);
-  const trackMp3BRef = useRef<string | null>(null);
+  const trackMp3ARef = useRef<string>('');
+  const trackMp3BRef = useRef<string>('');
   const trackIdARef = useRef<string | null>(null);
   const trackIdBRef = useRef<string | null>(null);
   const trackLikedARef = useRef<boolean | null>(null);
@@ -194,6 +194,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       'musicfile.removeai.ai',
       'suno.ai',
       'cdn.suno.ai',
+      'tempfile.aiquickdraw.com',
       'sunoapi.org',
       'sunousercontent.com',
       'mureka.org',
@@ -625,8 +626,34 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           };
           const dlA = pickDownloadForUrl(firstOk);
           const dlB = secondOk ? pickDownloadForUrl(secondOk) : null;
-          const primaryA = firstOk ?? dlA;
-          const primaryB = secondOk ? (secondOk ?? dlB) : null;
+          const previewA = firstOk;
+          const previewB = secondOk;
+          const masterA = dlA;
+          const masterB = dlB;
+          const primaryA = previewA || masterA || null;
+          const primaryB = previewB ? (previewB || masterB) : (masterB || null);
+          if (!primaryA) return;
+
+          const pickDurationForUrl = (targetUrl: string | null): number | null => {
+            if (!targetUrl) return null;
+            for (const it of items) {
+              const au =
+                it?.audio_url ||
+                it?.stream_audio_url ||
+                it?.source_stream_audio_url ||
+                it?.source_audio_url ||
+                it?.url ||
+                null;
+              const normalized = normalizePlayableUrl(au);
+              if (normalized && normalized === targetUrl) {
+                const d = Number(it?.duration);
+                return Number.isFinite(d) && d > 0 ? d : null;
+              }
+            }
+            return null;
+          };
+          const durA = pickDurationForUrl(previewA);
+          const durB = pickDurationForUrl(previewB);
 
           // Show "finalizing" label until COMPLETE, but do NOT block playback
           if (cbType !== 'complete') {
@@ -676,15 +703,50 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             if (coverA) setTrackCover(coverA);
           }
           setProviderLabel('API Box');
-          setTrackMp3A(primaryA);
-          setTrackMp3B(primaryB);
+          if (masterA) setTrackMp3A(masterA);
+          if (masterB) setTrackMp3B(masterB);
+
+          if (cbType === 'complete') {
+            try {
+              const raw = (await AsyncStorage.getItem(K_TRACKS)) || '[]';
+              const list: any[] = JSON.parse(raw) || [];
+              if (Array.isArray(list) && list.length) {
+                for (let i = list.length - 1; i >= 0; i--) {
+                  const rec = list[i];
+                  const f = rec?.first?.audio_url;
+                  const s = rec?.second?.audio_url;
+                  const matches =
+                    (typeof f === 'string' && !!previewA && f === previewA) ||
+                    (typeof s === 'string' && !!previewB && s === previewB);
+                  if (!matches) continue;
+                  const next = { ...rec, task_id: tid || rec?.task_id || null };
+                  if (next.first && typeof next.first === 'object') {
+                    next.first = { ...next.first };
+                    if (masterA) next.first.mp3_url = masterA;
+                    if (durA) next.first.duration = durA;
+                    if (typeof trackLikedARef.current === 'boolean') next.first.liked = trackLikedARef.current;
+                  }
+                  if (next.second && typeof next.second === 'object') {
+                    next.second = { ...next.second };
+                    if (masterB) next.second.mp3_url = masterB;
+                    if (durB) next.second.duration = durB;
+                    if (typeof trackLikedBRef.current === 'boolean') next.second.liked = trackLikedBRef.current;
+                  }
+                  list[i] = next;
+                  await AsyncStorage.setItem(K_TRACKS, JSON.stringify(list.slice(-20)));
+                  break;
+                }
+              }
+            } catch {}
+          }
 
           if (!alreadyPlayingSame && !isSilentUpgrade) {
             console.log('[Client] Starting playback:', primaryA);
             try {
               await audioService.configure();
               await audioService.resetSession();
-              await audioService.setQueue(primaryB ? [primaryA, primaryB] : [primaryA], { id: tid, title: titleA, titles: primaryB ? [titleA, titleB] : [titleA], artist: 'MoodFusion', artwork: coverA ?? null });
+              const queue: string[] = primaryB ? [primaryA, String(primaryB)] : [primaryA];
+              await audioService.setQueue(queue, { id: tid, title: titleA, titles: primaryB ? [titleA, titleB] : [titleA], artist: 'MoodFusion', artwork: coverA ?? null });
               await audioService.load();
               await audioService.play();
               setHasStartedPlayback(true);
@@ -720,7 +782,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           } else {
             setIsGenerating(true);
           }
-          currentTaskIdRef.current = null;
+          if (tid) currentTaskIdRef.current = tid;
 
           // Persistence
           await AsyncStorage.setItem(K_URL, primaryA);
@@ -892,8 +954,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     setTrackCover(null);
     setTrackCoverA(null);
     setTrackCoverB(null);
-    setTrackMp3A(null);
-    setTrackMp3B(null);
+    setTrackMp3A('');
+    setTrackMp3B('');
     setTrackIdA(null);
     setTrackIdB(null);
     setTrackLikedA(null);

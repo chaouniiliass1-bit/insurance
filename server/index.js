@@ -400,6 +400,10 @@ async function upsertTracksForProfile(profile_id, urls, download_url, title, cov
       } catch (err) {}
 
       if (isComplete) {
+        // Keep stream_url for preview fallback and matching
+        if (typeof u === 'string' && u.startsWith('http') && !row.stream_url) {
+          row.stream_url = u;
+        }
         // mp3_url: Save the finalized audio_url (the tempfile.aiquickdraw.com link).
         if (hasMp3) {
           if (await verifyMp3Url(dl)) row.mp3_url = normalizeExternalUrl(dl);
@@ -409,6 +413,9 @@ async function upsertTracksForProfile(profile_id, urls, download_url, title, cov
           row.audio_url = audio;
         } else if (!id && !row.audio_url) {
           row.audio_url = row.mp3_url || u;
+        }
+        if (!id && typeof row.liked !== 'boolean') {
+          row.liked = false;
         }
         // Metadata Sync: Save the duration
         if (hasDur) row.duration = dur;

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, RefreshControl, View, Text, StyleSheet, Pressable, FlatList, Alert, Platform, Linking, Image } from 'react-native';
+import { ActivityIndicator, RefreshControl, View, Text, StyleSheet, Pressable, FlatList, Alert, Platform, Linking, Image, ToastAndroid } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useIsFocused } from '@react-navigation/native';
@@ -312,8 +312,8 @@ export default function LibraryScreen() {
     const coverUrl = normalizeTapUrl(item?.image_url || null);
     const mp3Url = normalizeTapUrl(item?.mp3_url || null);
     const streamUrl = normalizeTapUrl(item?.stream_url || null);
-    // Strict MP3 Playback: Only play from mp3_url in the Library.
-    const playbackUrl = mp3Url;
+    const playbackUrl = mp3Url || streamUrl;
+    const playbackFallback = mp3Url ? streamUrl : null;
     const isActive = !!trackUrl && trackUrl === playbackUrl;
     const stableKey = (id || item?.stream_url || audioUrl || title) as string;
     const saveState = downloadState[stableKey] || 'idle';
@@ -326,11 +326,17 @@ export default function LibraryScreen() {
             Alert.alert('High Quality Crafting', 'The track is still being crafted in high quality. Please wait a moment.');
             return;
           }
+          if (!mp3Url && streamUrl) {
+            try {
+              if (Platform.OS === 'android') ToastAndroid.show('High-quality master is still processing. Playing preview…', ToastAndroid.SHORT);
+              else Alert.alert('High Quality Crafting', 'High-quality master is still processing. Playing preview…');
+            } catch {}
+          }
           void (async () => {
             try { await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
             setBufferingKey(stableKey);
             try {
-              await playUrl(playbackUrl, title, coverUrl, id, liked, null, item?.duration ?? null);
+              await playUrl(playbackUrl, title, coverUrl, id, liked, playbackFallback, item?.duration ?? null);
             } catch {}
             setBufferingKey(null);
           })();

@@ -26,7 +26,7 @@ if (!SERVICE_KEY) {
   console.error('CRITICAL ERROR: SUPABASE_SERVICE_ROLE_KEY IS UNDEFINED IN ENVIRONMENT');
 }
 console.log('Supabase Auth Attempt with key starting with:', SERVICE_KEY?.substring(0, 5));
-const URL = String(process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL || '').trim().replace(/\/$/, '');
+const SUPABASE_URL_ENV = String(process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL || '').trim().replace(/\/$/, '');
 try {
   console.log('DB Config Check:', {
     hasUrl: !!(process.env.SUPABASE_URL || process.env.EXPO_PUBLIC_SUPABASE_URL),
@@ -1088,7 +1088,7 @@ console.log('[Server] ALL MODES: /set-latest-track disabled');
 
 // --- Supabase Secure Proxy (Service Role) ---
 // Use service role key ONLY on the server. Never expose to client.
-const SUPABASE_URL = (URL || 'https://wiekabbfmpmxjhiwyfzt.supabase.co').replace(/\/$/, '');
+const SUPABASE_URL = (SUPABASE_URL_ENV || 'https://wiekabbfmpmxjhiwyfzt.supabase.co').replace(/\/$/, '');
 const SUPABASE_SERVICE_ROLE_KEY = String(SERVICE_KEY || '').trim();
 
 // Diagnostic endpoint to verify Supabase connectivity

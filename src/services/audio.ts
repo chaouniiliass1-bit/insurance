@@ -33,6 +33,21 @@ class AudioService {
   async configure() {
     if (this.useTP) {
       try {
+        if (this.sound) {
+          try { await this.sound.stopAsync(); } catch {}
+          try { await this.sound.unloadAsync(); } catch {}
+          this.sound = null;
+        }
+        if (this.nextSound) {
+          try { await this.nextSound.stopAsync(); } catch {}
+          try { await this.nextSound.unloadAsync(); } catch {}
+          this.nextSound = null;
+        }
+        if (this.prevSound) {
+          try { await this.prevSound.stopAsync(); } catch {}
+          try { await this.prevSound.unloadAsync(); } catch {}
+          this.prevSound = null;
+        }
         if (!this.tpReady) {
           await TrackPlayer.setupPlayer({});
           this.tpReady = true;
@@ -129,7 +144,6 @@ class AudioService {
     this.currentIndex = urls.length ? 0 : -1;
     if (this.useTP) {
       try {
-        await TrackPlayer.reset();
         const baseId = typeof meta?.id === 'string' && meta.id.trim().length ? meta.id.trim() : String(Date.now());
         const title = typeof meta?.title === 'string' && meta.title.trim().length ? meta.title.trim() : 'MoodFusion';
         const artist = typeof meta?.artist === 'string' && meta.artist.trim().length ? meta.artist.trim() : 'MoodFusion';
@@ -270,6 +284,7 @@ class AudioService {
 
   // Whether a preloaded next track is ready to switch to
   hasNextPreloaded(): boolean {
+    if (this.useTP) return this.queue.length > 1;
     return !!this.nextSound;
   }
 
@@ -341,8 +356,6 @@ class AudioService {
   // Preload a next track without interrupting current playback
   async preloadNext(url: string) {
     if (this.useTP) {
-      // Add next track to the queue; playback will skip when requested
-      try { await TrackPlayer.add({ id: `next-${Date.now()}`, url, title: 'MoodFusion', artist: 'Suno', headers: { 'Bypass-Tunnel-Reminder': 'true' } }); } catch {}
       return;
     }
     if (this.nextSound) {
@@ -358,7 +371,13 @@ class AudioService {
 
   // Crossfade into the preloaded next track over durationMs (default 1200ms)
   async crossfadeToNext(durationMs = 800) {
-    if (this.useTP) { try { await this.next(); } catch {}; return; }
+    if (this.useTP) {
+      try {
+        try { await TrackPlayer.pause(); } catch {}
+        await this.next();
+      } catch {}
+      return;
+    }
     if (!this.nextSound) return;
     const current = this.sound;
     const next = this.nextSound;
@@ -412,7 +431,11 @@ class AudioService {
   // Crossfade back to the previous track (if available) over durationMs
   async crossfadeToPrev(durationMs = 800) {
     if (this.useTP) {
-      try { await TrackPlayer.skipToPrevious(); await TrackPlayer.play(); } catch {}
+      try {
+        try { await TrackPlayer.pause(); } catch {}
+        await TrackPlayer.skipToPrevious();
+        await TrackPlayer.play();
+      } catch {}
       return;
     }
     if (!this.prevSound) return;

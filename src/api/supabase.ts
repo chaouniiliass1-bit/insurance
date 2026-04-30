@@ -283,7 +283,7 @@ export const supabaseApi = {
     }
   },
   // Tracks: insert generated tracks and list by profile_id
-  insertTrack: async (row: { profile_id: string; audio_url: string; title?: string | null; mood?: string | null; genres?: string[] | null; liked?: boolean | null; stream_url?: string | null; mp3_url?: string | null; image_url?: string | null }) => {
+  insertTrack: async (row: { profile_id: string; audio_url: string; task_id?: string | null; title?: string | null; mood?: string | null; genres?: string[] | null; liked?: boolean | null; stream_url?: string | null; mp3_url?: string | null; image_url?: string | null }) => {
     try {
       // Try backend proxy first for reliability (bypasses RLS + avoids device internet issues)
       try {
@@ -308,6 +308,7 @@ export const supabaseApi = {
       const payload: any = {
         profile_id: row.profile_id,
         audio_url: row.audio_url,
+        task_id: row.task_id ?? null,
         title: row.title ?? null,
         mood: row.mood ?? null,
         // Schema expects text; store comma-separated genres
@@ -348,7 +349,41 @@ export const supabaseApi = {
       return { ok: false };
     }
   },
-  insertTracksBulk: async (rows: Array<{ profile_id: string; audio_url: string; title?: string | null; mood?: string | null; genres?: string[] | null; liked?: boolean | null; stream_url?: string | null; mp3_url?: string | null; image_url?: string | null }>) => {
+  findTrackIdByTaskId: async (profile_id: string, task_id: string, audio_url?: string | null) => {
+    try {
+      const pid = String(profile_id || '').trim();
+      const tid = String(task_id || '').trim();
+      if (!pid || !tid) return { ok: false, status: 400, data: null };
+
+      // Prefer proxy (service role), since client RLS may block.
+      try {
+        const base = getApiBase();
+        if (base) {
+          const select = encodeURIComponent('id,audio_url,stream_url,created_at');
+          const url =
+            `${base}/supabase/tracks?profile_id=eq.${encodeURIComponent(pid)}` +
+            `&task_id=eq.${encodeURIComponent(tid)}` +
+            (audio_url ? `&audio_url=eq.${encodeURIComponent(audio_url)}` : '') +
+            `&select=${select}&order=created_at.desc&limit=1`;
+          const resp = await fetch(url, { headers: TUNNEL_BYPASS_HEADER });
+          const data = await parseJsonResponse(resp, 'tracks/find-id-by-task');
+          if (resp.ok) {
+            const id = Array.isArray(data) && data[0]?.id ? String(data[0].id) : null;
+            return { ok: true, status: resp.status, data: id };
+          }
+        }
+      } catch {}
+
+      const q = supabase.from('tracks').select('id').eq('profile_id', pid).eq('task_id', tid).order('created_at', { ascending: false }).limit(1);
+      const { data, error, status } = await q;
+      if (error) return { ok: false, status: status || 400, data: null };
+      const id = Array.isArray(data) && data[0]?.id ? String(data[0].id) : null;
+      return { ok: true, status: status || 200, data: id };
+    } catch {
+      return { ok: false, status: 500, data: null };
+    }
+  },
+  insertTracksBulk: async (rows: Array<{ profile_id: string; audio_url: string; task_id?: string | null; title?: string | null; mood?: string | null; genres?: string[] | null; liked?: boolean | null; stream_url?: string | null; mp3_url?: string | null; image_url?: string | null }>) => {
     try {
       // Try backend proxy first for reliability (bypasses RLS + avoids device internet issues)
       try {
@@ -373,6 +408,7 @@ export const supabaseApi = {
       const payload = (Array.isArray(rows) ? rows : []).map((row) => ({
         profile_id: row.profile_id,
         audio_url: row.audio_url,
+        task_id: row.task_id ?? null,
         title: row.title ?? null,
         mood: row.mood ?? null,
         genres: Array.isArray(row.genres) ? row.genres.filter(Boolean).join(',') : (row.genres as any) ?? null,
@@ -440,7 +476,7 @@ export const supabaseApi = {
 
       const { data, error } = await supabase
         .from('tracks')
-        .select('id,audio_url,title,mood,genres,liked,created_at,image_url,stream_url,mp3_url,duration')
+        .select('id,task_id,audio_url,title,mood,genres,liked,created_at,image_url,stream_url,mp3_url,duration')
         .eq('profile_id', profile_id)
         .order('created_at', { ascending: false });
 
@@ -493,6 +529,23 @@ export const supabaseApi = {
   },
   findTrackIdByUrl: async (profile_id: string, audio_url: string) => {
     try {
+      // Prefer backend proxy to bypass RLS on device
+      try {
+        const base = getApiBase();
+        if (base) {
+          const sel = encodeURIComponent('id');
+          const url =
+            `${base}/supabase/tracks?profile_id=eq.${encodeURIComponent(profile_id)}` +
+            `&audio_url=eq.${encodeURIComponent(audio_url)}` +
+            `&select=${sel}&limit=1`;
+          const resp = await fetch(url, { headers: TUNNEL_BYPASS_HEADER });
+          const data = await parseJsonResponse(resp, 'tracks/find-id-by-url');
+          if (resp.ok) {
+            const id = Array.isArray(data) && data[0]?.id ? String(data[0].id) : null;
+            return { ok: true, data: id };
+          }
+        }
+      } catch {}
       const { data, error } = await supabase.from('tracks').select('id').eq('profile_id', profile_id).eq('audio_url', audio_url).limit(1);
       if (error) { logRequest('error', { method: 'SELECT', error: String(error?.message || error) }); return { ok: false, status: 400, data: error.message }; }
       const id = Array.isArray(data) && data[0]?.id ? String(data[0].id) : null;
@@ -502,7 +555,7 @@ export const supabaseApi = {
       return { ok: false };
     }
   },
-  updateTrackLiked: async (track_id: string, liked: boolean) => {
+  updateTrackLiked: async (track_id: string | null, liked: boolean, ctx?: { profile_id?: string | null; task_id?: string | null; audio_url?: string | null; stream_url?: string | null }) => {
     try {
       // Try backend proxy first for reliability (bypasses RLS)
       try {
@@ -511,17 +564,54 @@ export const supabaseApi = {
           const resp = await fetch(`${base}/supabase/tracks/update-liked`, {
             method: 'POST',
             headers: withTunnelBypassHeaders({ 'Content-Type': 'application/json' }),
-            body: JSON.stringify({ track_id, liked }),
+            body: JSON.stringify({
+              track_id: track_id || null,
+              liked,
+              profile_id: ctx?.profile_id ?? null,
+              task_id: ctx?.task_id ?? null,
+              audio_url: ctx?.audio_url ?? null,
+              stream_url: ctx?.stream_url ?? null,
+            }),
           });
           const data = await parseJsonResponse(resp, 'tracks/update-liked');
           if (resp.ok) return { ok: true, data };
         }
       } catch {}
+      if (!track_id) return { ok: false, status: 400, data: 'missing_track_id' };
       const { data, error } = await supabase.from('tracks').update({ liked }).eq('id', track_id).select('id,liked');
       if (error) { logRequest('error', { method: 'UPDATE', error: String(error?.message || error) }); return { ok: false, status: 400, data: error.message }; }
       return { ok: true, data };
     } catch (e: any) {
       logRequest('error', { method: 'UPDATE', error: String(e?.message || e) });
+      return { ok: false };
+    }
+  },
+  updateTrackMasterByTask: async (row: { profile_id: string; task_id: string; stream_url: string; mp3_url?: string | null; duration?: number | null }) => {
+    try {
+      const base = getApiBase();
+      if (!base) return { ok: false, status: 0, data: 'api_base_missing' };
+      const pid = String(row.profile_id || '').trim();
+      const tid = String(row.task_id || '').trim();
+      const su = String(row.stream_url || '').trim();
+      if (!pid || !tid || !su) return { ok: false, status: 400, data: 'missing_fields' };
+      const url =
+        `${base}/supabase/tracks?profile_id=eq.${encodeURIComponent(pid)}` +
+        `&task_id=eq.${encodeURIComponent(tid)}` +
+        `&stream_url=eq.${encodeURIComponent(su)}`;
+      const payload: any = {};
+      if (typeof row.mp3_url === 'string' && row.mp3_url.startsWith('http')) payload.mp3_url = row.mp3_url;
+      if (typeof row.duration === 'number' && Number.isFinite(row.duration) && row.duration > 0) payload.duration = row.duration;
+      if (!Object.keys(payload).length) return { ok: true, status: 200, data: null };
+      const resp = await fetch(url, {
+        method: 'PATCH',
+        headers: withTunnelBypassHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload),
+      });
+      const data = await parseJsonResponse(resp, 'tracks/update-master-by-task');
+      if (!resp.ok) return { ok: false, status: resp.status, data };
+      return { ok: true, status: resp.status, data };
+    } catch (e: any) {
+      logRequest('error', { method: 'UPDATE_MASTER', error: String(e?.message || e) });
       return { ok: false };
     }
   },

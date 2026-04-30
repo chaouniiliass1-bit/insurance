@@ -58,6 +58,10 @@ export async function generateSunoTrack(
   const payload = {
     prompt,
     tags,
+    mood,
+    genre1,
+    genre2,
+    genres: [genre1, genre2],
     instrumental: vocalMode === 'instrumental',
     vocalMode: vocalMode || 'lyrics',
     callback_url: cbUrl,

@@ -660,6 +660,69 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             setStatusLabel('Finalizing track…');
           }
           const tid = evt?.task_id ? String(evt.task_id) : null;
+          try {
+            const ids = Array.isArray((evt as any)?.ids) ? (evt as any).ids : null;
+            if (ids && ids.length) {
+              const id0 = ids[0] ? String(ids[0]) : null;
+              const id1 = ids[1] ? String(ids[1]) : null;
+              if (id0 && !trackIdARef.current) setTrackIdA(id0);
+              if (id1 && primaryB && !trackIdBRef.current) setTrackIdB(id1);
+            }
+          } catch {}
+          const isComplete = cbType === 'complete';
+          const activePlayingUrl = isSecondActiveRef.current ? (currentTrackBRef.current ?? null) : (currentTrackUrlRef.current ?? null);
+          const isListeningToPreview =
+            !!isComplete &&
+            !!tid &&
+            hasStartedPlaybackRef.current &&
+            (activePlayingUrl === previewA || activePlayingUrl === previewB);
+
+          if (isListeningToPreview) {
+            if (masterA) setTrackMp3A(masterA);
+            if (masterB) setTrackMp3B(masterB);
+            if (durA && !playbackDurationMillis) {
+              try { setPlaybackDurationMillis(Math.floor(durA * 1000)); } catch {}
+            }
+            try {
+              const raw = (await AsyncStorage.getItem(K_TRACKS)) || '[]';
+              const list: any[] = JSON.parse(raw) || [];
+              if (Array.isArray(list) && list.length) {
+                for (let i = list.length - 1; i >= 0; i--) {
+                  const rec = list[i];
+                  const f = rec?.first?.audio_url;
+                  const s = rec?.second?.audio_url;
+                  const matches =
+                    (typeof f === 'string' && !!previewA && f === previewA) ||
+                    (typeof s === 'string' && !!previewB && s === previewB);
+                  if (!matches) continue;
+                  const next = { ...rec, task_id: tid || rec?.task_id || null };
+                  if (next.first && typeof next.first === 'object') {
+                    next.first = { ...next.first };
+                    if (masterA) next.first.mp3_url = masterA;
+                    if (durA) next.first.duration = durA;
+                    if (typeof trackLikedARef.current === 'boolean') next.first.liked = trackLikedARef.current;
+                  }
+                  if (next.second && typeof next.second === 'object') {
+                    next.second = { ...next.second };
+                    if (masterB) next.second.mp3_url = masterB;
+                    if (durB) next.second.duration = durB;
+                    if (typeof trackLikedBRef.current === 'boolean') next.second.liked = trackLikedBRef.current;
+                  }
+                  list[i] = next;
+                  await AsyncStorage.setItem(K_TRACKS, JSON.stringify(list.slice(-20)));
+                  break;
+                }
+              }
+            } catch {}
+            try {
+              const pid = profileIdRef.current;
+              if (pid && tid) {
+                if (masterA && previewA) void supabaseApi.updateTrackMasterByTask({ profile_id: pid, task_id: tid, stream_url: previewA, mp3_url: masterA, duration: durA });
+                if (masterB && previewB) void supabaseApi.updateTrackMasterByTask({ profile_id: pid, task_id: tid, stream_url: previewB, mp3_url: masterB, duration: durB });
+              }
+            } catch {}
+            return;
+          }
           let alreadyProcessed = false;
           if (tid) {
             alreadyProcessed = processedTaskIdsRef.current.has(tid);
@@ -679,7 +742,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             (cbType === 'complete' || cbType === 'poll');
 
           const alreadyPlayingSame =
-            hasStartedPlaybackRef.current && currentTrackUrlRef.current === primaryA;
+            hasStartedPlaybackRef.current && (activePlayingUrl === primaryA || (!!primaryB && activePlayingUrl === primaryB));
 
           setTrackAReadyAtMs((prev) => (prev == null ? Date.now() : prev));
           if (secondOk) setTrackBReadyAtMs((prev) => (prev == null ? Date.now() : prev));
@@ -757,15 +820,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             }
           } else if (isSilentUpgrade) {
             console.log('[Client] Silent upgrade received for task:', tid);
-            // Just update the queue metadata/artwork in the service if possible, 
-            // but don't reset the session.
-            try {
-              audioService.updateMetadata({ 
-                artwork: coverA ?? null,
-                title: titleA,
-                titles: primaryB ? [titleA, titleB] : [titleA]
-              });
-            } catch {}
           } else if (primaryB && currentTrackBRef.current !== primaryB) {
             console.log('[Client] Second track arrived; preloading for smooth switch');
             try {
@@ -795,8 +849,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           navigate('Player');
 
           // Client-side redundancy: Save tracks immediately when they arrive
-          void persistSingleTrack(primaryA, titleA);
-          if (primaryB) void persistSingleTrack(primaryB, titleB || `${titleA} 2`);
+          void persistSingleTrack(primaryA, titleA, 'A', tid);
+          if (primaryB) void persistSingleTrack(primaryB, titleB || `${titleA} 2`, 'B', tid);
 
           // Server is the source of truth for Library rows. Only resolve track IDs for like/history.
           try {
@@ -1045,7 +1099,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   };
 
   // Helper: persist a single track to Supabase immediately when URL arrives
-  const persistSingleTrack = async (url: string | null, title?: string | null) => {
+  const persistSingleTrack = async (url: string | null, title?: string | null, which?: 'A' | 'B', taskId?: string | null) => {
     try {
       const pid = profileIdRef.current;
       if (!pid || !url || !url.startsWith('http')) return;
@@ -1056,6 +1110,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       const resp: any = await supabaseApi.insertTrack({
         profile_id: pid,
         audio_url: url,
+        task_id: taskId ? String(taskId) : null,
+        stream_url: url,
         title: title ?? null,
         mood: moodRef.current ?? null,
         genres: genresArr,
@@ -1064,7 +1120,62 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       if (resp?.ok === false) {
         console.warn('[Supabase][insertTrack] failed', { status: resp?.status, data: resp?.data });
       } else {
-        console.log('[Supabase][insertTrack] success', { profile_id: pid, audio_url: url });
+        let insertedId: string | null = null;
+        try {
+          const d = resp?.data;
+          if (Array.isArray(d) && d[0]?.id) insertedId = String(d[0].id);
+          else if (d && typeof d === 'object' && d?.id) insertedId = String(d.id);
+        } catch {}
+        if (insertedId) {
+          if (which === 'A') setTrackIdA(insertedId);
+          if (which === 'B') setTrackIdB(insertedId);
+          try {
+            const raw = (await AsyncStorage.getItem(K_TRACKS)) || '[]';
+            const list: any[] = JSON.parse(raw) || [];
+            const tid = taskId ? String(taskId) : null;
+            let updated = false;
+            if (Array.isArray(list) && list.length) {
+              for (let i = list.length - 1; i >= 0; i--) {
+                const rec = list[i];
+                const f = rec?.first?.audio_url;
+                const s = rec?.second?.audio_url;
+                const matches =
+                  (typeof f === 'string' && f === url) ||
+                  (typeof s === 'string' && s === url) ||
+                  (!!tid && typeof rec?.task_id === 'string' && rec.task_id === tid);
+                if (!matches) continue;
+                const next = { ...rec, task_id: tid || rec?.task_id || null };
+                if (next.first && typeof next.first === 'object' && (next.first.audio_url === url || which === 'A')) {
+                  next.first = { ...next.first, id: insertedId };
+                }
+                if (next.second && typeof next.second === 'object' && (next.second.audio_url === url || which === 'B')) {
+                  next.second = { ...next.second, id: insertedId };
+                }
+                list[i] = next;
+                await AsyncStorage.setItem(K_TRACKS, JSON.stringify(list.slice(-20)));
+                updated = true;
+                break;
+              }
+            }
+            if (!updated) {
+              const record = {
+                timestamp: Date.now(),
+                task_id: tid,
+                mood: moodRef.current ?? null,
+                genres: [g1Ref.current ?? null, g2Ref.current ?? null],
+                first: which === 'B'
+                  ? { id: null, audio_url: null, title: null, image_url: null, mp3_url: null, liked: null }
+                  : { id: insertedId, audio_url: url, title: title ?? null, image_url: trackCoverARef.current ?? null, mp3_url: trackMp3ARef.current || null, liked: false },
+                second: which === 'B'
+                  ? { id: insertedId, audio_url: url, title: title ?? null, image_url: trackCoverBRef.current ?? null, mp3_url: trackMp3BRef.current || null, liked: false }
+                  : { id: null, audio_url: null, title: null, image_url: null, mp3_url: null, liked: null },
+              };
+              list.push(record);
+              await AsyncStorage.setItem(K_TRACKS, JSON.stringify(list.slice(-20)));
+            }
+          } catch {}
+        }
+        console.log('[Supabase][insertTrack] success', { profile_id: pid, audio_url: url, id: insertedId });
       }
     } catch (err) {
       console.error('[Supabase][insertTrack] exception', err);
@@ -1076,6 +1187,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     try {
       const record = {
         timestamp: Date.now(),
+        task_id: currentTaskIdRef.current ?? null,
         mood: moodRef.current ?? null,
         genres: [g1Ref.current ?? null, g2Ref.current ?? null],
         first: { id: trackIdARef.current ?? null, audio_url: firstUrl, title: title ?? null, image_url: trackCoverARef.current ?? null, mp3_url: trackMp3ARef.current ?? null, liked: trackLikedARef.current ?? null },
@@ -1260,20 +1372,61 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
         try {
           if (!profileId) return;
           let trackId = targetId;
+          let taskIdFallback: string | null = null;
           // Ensure we have a valid database UUID
           const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trackId || '');
           if (!isUuid) {
+            // 1) Try URL lookup
             const found = await supabaseApi.findTrackIdByUrl(profileId, url);
             trackId = (found as any)?.data || null;
           }
+
+          // 2) Try saved cache (by url or task_id)
           if (!trackId) {
-            console.warn('[Client] Could not resolve DB UUID for like toggle');
-            return;
+            try {
+              const raw = (await AsyncStorage.getItem(K_TRACKS)) || '[]';
+              const list: any[] = JSON.parse(raw) || [];
+              const rec = Array.isArray(list)
+                ? [...list].reverse().find((r) => r?.first?.audio_url === url || r?.second?.audio_url === url)
+                : null;
+              const cachedId =
+                rec?.first?.audio_url === url && rec?.first?.id ? String(rec.first.id) :
+                rec?.second?.audio_url === url && rec?.second?.id ? String(rec.second.id) :
+                null;
+              if (cachedId && /^[0-9a-f-]{36}$/i.test(cachedId)) {
+                trackId = cachedId;
+              } else {
+                const tid =
+                  (typeof rec?.task_id === 'string' && rec.task_id.trim().length ? rec.task_id.trim() : null) ||
+                  (typeof currentTaskIdRef.current === 'string' && currentTaskIdRef.current.trim().length ? currentTaskIdRef.current.trim() : null);
+                taskIdFallback = tid;
+                if (tid) {
+                  const byTask: any = await supabaseApi.findTrackIdByTaskId(profileId, tid, url);
+                  const id = byTask?.data ? String(byTask.data) : null;
+                  if (id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+                    trackId = id;
+                    if (isA) setTrackIdA(id);
+                    if (isB) setTrackIdB(id);
+                    try {
+                      if (rec) {
+                        if (rec?.first?.audio_url === url) rec.first = { ...(rec.first || {}), id };
+                        if (rec?.second?.audio_url === url) rec.second = { ...(rec.second || {}), id };
+                        await AsyncStorage.setItem(K_TRACKS, JSON.stringify(list.slice(-20)));
+                      }
+                    } catch {}
+                  }
+                }
+              }
+            } catch {}
           }
-          const resp = await supabaseApi.updateTrackLiked(trackId, nextLiked);
+          if (!taskIdFallback) {
+            taskIdFallback = typeof currentTaskIdRef.current === 'string' && currentTaskIdRef.current.trim().length ? currentTaskIdRef.current.trim() : null;
+          }
+          const ctx = { profile_id: profileId, task_id: taskIdFallback, audio_url: url, stream_url: url };
+          const resp = await supabaseApi.updateTrackLiked(trackId || null, nextLiked, ctx);
           if (!resp.ok) throw new Error('Update failed');
-          
-          if (nextLiked) {
+
+          if (nextLiked && trackId) {
             await supabaseApi.insertHistory({ profile_id: profileId, track_id: trackId });
           }
         } catch (err) {
@@ -1299,6 +1452,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
             typeof durationSeconds === 'number' && Number.isFinite(durationSeconds) && durationSeconds > 0
               ? Math.floor(durationSeconds * 1000)
               : 0;
+          try { await audioService.stop(); } catch {}
           try { await audioService.configure(); } catch {}
           try { await audioService.resetSession(); } catch {}
           setPlaybackPositionMillis(0);
@@ -1402,6 +1556,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
           hasStartedPlaybackRef.current = false;
           setIsSecondActive(false);
           navigate('Player');
+          try { await audioService.stop(); } catch {}
           try { await audioService.configure(); } catch {}
           try { await audioService.resetSession(); } catch {}
           const slowToast = setTimeout(() => {

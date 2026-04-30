@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, RefreshControl, View, Text, StyleSheet, Pressable, FlatList, Alert, Platform, Linking, Image, ToastAndroid } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useIsFocused } from '@react-navigation/native';
+import { useIsFocused, useNavigation } from '@react-navigation/native';
 import { goBack } from '../navigation';
 import GradientBackground from '../components/GradientBackground';
 import { useAppState } from '../context/AppState';
@@ -11,6 +11,7 @@ import ProfileModal from '../components/ProfileModal';
 import AppHeader from '../components/AppHeader';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
+import { MoodImages } from '../theme';
 
 // Lazy load expo-file-system to avoid type/module resolution errors when unavailable
 function getFileSystem(): any {
@@ -33,6 +34,7 @@ type HistItem = {
   mood?: string | null;
   genres?: string[] | null;
   id?: string | null;
+  task_id?: string | null;
   liked?: boolean | null;
   audio_url?: string | null;
   image_url?: string | null;
@@ -45,6 +47,7 @@ type HistItem = {
 
 export default function LibraryScreen() {
   const insets = useSafeAreaInsets();
+  const navigation = useNavigation<any>();
   const { playUrl, profile, profileId, trackUrl, hasStartedPlayback } = useAppState() as any;
   const [items, setItems] = useState<HistItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -101,11 +104,14 @@ export default function LibraryScreen() {
       const primary = audio || mp3 || stream;
       if (!primary) continue;
       const id = r?.id != null ? String(r.id) : null;
-      const key = id || primary;
+      const taskId = r?.task_id != null ? String(r.task_id) : null;
+      const t = typeof r?.title === 'string' ? r.title.trim() : '';
+      const key = id || (taskId && t ? `${taskId}::${t}` : primary);
       if (seen.has(key)) continue;
       seen.add(key);
         out.push({
           id,
+          task_id: taskId,
           audio_url: audio || mp3 || stream,
           mp3_url: mp3,
           stream_url: stream,
@@ -123,15 +129,59 @@ export default function LibraryScreen() {
 
   const mergeOptimistic = (base: HistItem[], optimistic: HistItem[]) => {
     const out = Array.isArray(base) ? base.slice() : [];
-    const seen = new Set<string>();
-    for (const it of out) {
-      const k = it?.id || it?.stream_url || it?.audio_url || '';
-      if (k) seen.add(k);
+    const idToIndex = new Map<string, number>();
+    const streamToIndex = new Map<string, number>();
+    const audioToIndex = new Map<string, number>();
+    const taskTitleToIndex = new Map<string, number>();
+    for (let i = 0; i < out.length; i++) {
+      const it = out[i];
+      const id = it?.id ? String(it.id) : '';
+      if (id) idToIndex.set(id, i);
+      const su = typeof it?.stream_url === 'string' ? it.stream_url : '';
+      if (su) streamToIndex.set(su, i);
+      const au = typeof it?.audio_url === 'string' ? it.audio_url : '';
+      if (au) audioToIndex.set(au, i);
+      const tid = typeof it?.task_id === 'string' ? it.task_id.trim() : '';
+      const tt = typeof it?.title === 'string' ? it.title.trim() : '';
+      if (tid && tt) taskTitleToIndex.set(`${tid}::${tt}`, i);
     }
     for (const it of Array.isArray(optimistic) ? optimistic : []) {
-      const k = it?.id || it?.stream_url || it?.audio_url || '';
-      if (!k || seen.has(k)) continue;
-      seen.add(k);
+      const id = it?.id ? String(it.id) : '';
+      const tid = typeof it?.task_id === 'string' ? it.task_id.trim() : '';
+      const tt = typeof it?.title === 'string' ? it.title.trim() : '';
+      const su = typeof it?.stream_url === 'string' ? it.stream_url : '';
+      const au = typeof it?.audio_url === 'string' ? it.audio_url : '';
+
+      const idx =
+        (id && idToIndex.has(id) ? (idToIndex.get(id) as number) : -1) >= 0
+          ? (idToIndex.get(id) as number)
+          : (tid && tt && taskTitleToIndex.has(`${tid}::${tt}`) ? (taskTitleToIndex.get(`${tid}::${tt}`) as number) : -1) >= 0
+          ? (taskTitleToIndex.get(`${tid}::${tt}`) as number)
+          : (su && streamToIndex.has(su) ? (streamToIndex.get(su) as number) : -1) >= 0
+          ? (streamToIndex.get(su) as number)
+          : (au && audioToIndex.has(au) ? (audioToIndex.get(au) as number) : -1);
+
+      if (typeof idx === 'number' && idx >= 0) {
+        const existing = out[idx] || ({} as HistItem);
+        const existingGenres = Array.isArray(existing?.genres) ? existing.genres : [];
+        const incomingGenres = Array.isArray(it?.genres) ? it.genres : [];
+        out[idx] = {
+          ...existing,
+          id: existing?.id ?? it?.id ?? null,
+          task_id: existing?.task_id ?? it?.task_id ?? null,
+          title: existing?.title ?? it?.title ?? null,
+          audio_url: existing?.audio_url ?? it?.audio_url ?? null,
+          stream_url: existing?.stream_url ?? it?.stream_url ?? null,
+          mp3_url: existing?.mp3_url ?? it?.mp3_url ?? null,
+          image_url: existing?.image_url ?? it?.image_url ?? null,
+          duration: existing?.duration ?? it?.duration ?? null,
+          liked: typeof existing?.liked === 'boolean' ? existing.liked : (typeof it?.liked === 'boolean' ? it.liked : null),
+          mood: (typeof existing?.mood === 'string' && existing.mood.trim().length) ? existing.mood : (typeof it?.mood === 'string' ? it.mood : null),
+          genres: existingGenres.length ? existingGenres : incomingGenres,
+        };
+        continue;
+      }
+
       out.unshift(it);
     }
     return out;
@@ -148,6 +198,7 @@ export default function LibraryScreen() {
         if (firstAudio) {
           local.push({
             id: rec?.first?.id != null ? String(rec.first.id) : null,
+            task_id: rec?.task_id != null ? String(rec.task_id) : null,
             audio_url: firstAudio,
             mp3_url: typeof rec?.first?.mp3_url === 'string' ? rec.first.mp3_url : null,
             stream_url: firstAudio,
@@ -163,6 +214,7 @@ export default function LibraryScreen() {
         if (secondAudio) {
           local.push({
             id: rec?.second?.id != null ? String(rec.second.id) : null,
+            task_id: rec?.task_id != null ? String(rec.task_id) : null,
             audio_url: secondAudio,
             mp3_url: typeof rec?.second?.mp3_url === 'string' ? rec.second.mp3_url : null,
             stream_url: secondAudio,
@@ -305,11 +357,14 @@ export default function LibraryScreen() {
   const renderItem = ({ item }: { item: HistItem }) => {
     const mood = typeof item?.mood === 'string' ? item.mood : null;
     const genres = Array.isArray(item?.genres) ? item.genres : [];
-    const title = item?.title || (mood && genres.length ? `${mood} ${genres.slice(0, 2).join('-')}` : 'Saved Vibe');
+    const title = typeof item?.title === 'string' && item.title.trim().length ? item.title.trim() : 'Untitled';
     const id = item?.id != null ? String(item.id) : null;
+    const taskId = item?.task_id != null ? String(item.task_id) : null;
     const liked = typeof item?.liked === 'boolean' ? item.liked : null;
     const audioUrl = normalizeTapUrl(item?.audio_url || null);
-    const coverUrl = normalizeTapUrl(item?.image_url || null);
+    const coverUrl =
+      normalizeTapUrl(item?.image_url || null) ||
+      (mood && MoodImages[mood] ? MoodImages[mood] : MoodImages.Default);
     const mp3Url = normalizeTapUrl(item?.mp3_url || null);
     const streamUrl = normalizeTapUrl(item?.stream_url || null);
     const playbackUrl = mp3Url || streamUrl;
@@ -336,6 +391,7 @@ export default function LibraryScreen() {
             try { await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); } catch {}
             setBufferingKey(stableKey);
             try {
+              try { navigation.navigate('Player'); } catch {}
               await playUrl(playbackUrl, title, coverUrl, id, liked, playbackFallback, item?.duration ?? null);
             } catch {}
             setBufferingKey(null);
@@ -381,8 +437,10 @@ export default function LibraryScreen() {
                       trackId = found?.data ? String(found.data) : null;
                     }
                     if (trackId) {
-                      await supabaseApi.updateTrackLiked(trackId, next);
+                      await supabaseApi.updateTrackLiked(trackId, next, { profile_id: effectiveProfileId, task_id: taskId, audio_url: audioUrl, stream_url: streamUrl });
+                      return;
                     }
+                    await supabaseApi.updateTrackLiked(null, next, { profile_id: effectiveProfileId, task_id: taskId, audio_url: audioUrl, stream_url: streamUrl });
                   } catch {}
                 })();
               }}

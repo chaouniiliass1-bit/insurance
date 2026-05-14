@@ -50,6 +50,15 @@ process.env.PATH = `${BIN_DIR}:${NODE_BIN_DIR}:${process.env.PATH || ''}`;
 const PORT = process.env.PORT || 8788;
 const IS_DEV = String(process.env.EXPO_PUBLIC_IS_DEV).toLowerCase() === 'true';
 const DISABLE_SOCKET_URL_UPSERT = String(process.env.DISABLE_SOCKET_URL_UPSERT).toLowerCase() === 'true';
+try {
+  const commit =
+    process.env.RAILWAY_GIT_COMMIT_SHA ||
+    process.env.RAILWAY_COMMIT_SHA ||
+    process.env.GIT_COMMIT ||
+    process.env.VERCEL_GIT_COMMIT_SHA ||
+    '';
+  console.log('[Server] build', { commit: commit ? String(commit).slice(0, 12) : null, economy: 'tier,generations_left' });
+} catch {}
 // Track current tunnel and monitor health in dev
 let CURRENT_PUBLIC_URL = null;
 let ENSURING_TUNNEL = false;
@@ -321,7 +330,7 @@ function parseMoodGenresFromTags(tags) {
   return { mood, genres };
 }
 
-async function upsertTracksForProfile(profile_id, urls, download_url, title, cover, task_id, source, durations, audio_urls, mood, genres) {
+async function upsertTracksForProfile(profile_id, urls, download_url, title, cover, task_id, source, durations, audio_urls, mood, genres, track_type, description) {
   const pidRaw = profile_id;
   // Simple extraction: if it looks like an ID, use it.
   const pid = (() => {
@@ -388,6 +397,8 @@ async function upsertTracksForProfile(profile_id, urls, download_url, title, cov
         image_url: typeof cover === 'string' ? cover : null,
         mood: typeof mood === 'string' && mood.trim().length ? mood.trim() : null,
         genres: typeof genres === 'string' && genres.trim().length ? genres.trim() : null,
+        track_type: typeof track_type === 'string' && track_type.trim().length ? track_type.trim() : null,
+        description: typeof description === 'string' && description.trim().length ? description.trim() : null,
         task_id: tid,
       };
 
@@ -491,6 +502,8 @@ async function upsertTracksForProfile(profile_id, urls, download_url, title, cov
         if (payload.mood == null) delete payload.mood;
         if (payload.genres == null) delete payload.genres;
         if (payload.liked == null) delete payload.liked;
+        if (payload.track_type == null) delete payload.track_type;
+        if (payload.description == null) delete payload.description;
         const byStream = await supabaseAdmin
           .from('tracks')
           .update(payload)
@@ -792,7 +805,7 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
           } catch {}
           try {
             const meta = taskMetaById.get(String(tid)) || null;
-            await upsertTracksForProfile(room, streamUrls.filter(Boolean), mp3s, onlySecond ? `${baseTitle} 2` : baseTitle, pickedCover, tid, 'poll', durs, audios, meta?.mood || null, meta?.genres || null);
+            await upsertTracksForProfile(room, streamUrls.filter(Boolean), mp3s, onlySecond ? `${baseTitle} 2` : baseTitle, pickedCover, tid, 'poll', durs, audios, meta?.mood || null, meta?.genres || null, meta?.track_type || null, meta?.description || null);
           } catch {}
           pollingByTaskId.delete(tid);
           return;
@@ -811,7 +824,7 @@ async function pollSunoTaskFromEnv(taskId, profile_id) {
               try { io.to(room).emit('suno:track', out); } catch {}
               try {
                 const meta = taskMetaById.get(String(tid)) || null;
-                await upsertTracksForProfile(room, urls, null, onlySecond ? `${baseTitle} 2` : baseTitle, pickedCover, tid, 'poll_early', null, null, meta?.mood || null, meta?.genres || null);
+                await upsertTracksForProfile(room, urls, null, onlySecond ? `${baseTitle} 2` : baseTitle, pickedCover, tid, 'poll_early', null, null, meta?.mood || null, meta?.genres || null, meta?.track_type || null, meta?.description || null);
               } catch {}
             } else {
               io.emit('suno:track', out);
@@ -941,7 +954,7 @@ async function pollSunoTaskSafetyNet(taskId, profile_id) {
         if (urls.length) {
           try {
             const meta = taskMetaById.get(String(tid)) || null;
-            await upsertTracksForProfile(room || profile_id || null, urls, null, null, null, tid, 'safetynet', null, null, meta?.mood || null, meta?.genres || null);
+            await upsertTracksForProfile(room || profile_id || null, urls, null, null, null, tid, 'safetynet', null, null, meta?.mood || null, meta?.genres || null, meta?.track_type || null, meta?.description || null);
           } catch {}
           if (room) {
             try { io.to(room).emit('suno:status', { task_id: tid, status: 'success', message: 'Ready' }); } catch {}
@@ -1346,7 +1359,7 @@ app.get(['/supabase/profiles/by-nickname', '/supabase/profiles/by-nickname/'], a
     const nickname = String(req.query.nickname || '').trim();
     if (!nickname) return res.status(400).json({ error: 'nickname required' });
     const filter = `nickname=eq.${encodeURIComponent(nickname)}`;
-    const select = encodeURIComponent('id,coins,nickname,avatar_url,password_hash,keep_logged_in,device_id');
+    const select = encodeURIComponent('id,tier,generations_left,last_refill_at,nickname,avatar_url,password_hash,keep_logged_in,device_id,device_fingerprint');
     const url = `${SUPABASE_URL}/rest/v1/profiles?${filter}&select=${select}`;
     const resp = await axios.get(url, { headers: supabaseHeaders(), timeout: 8000 });
     if (logCriticalIfSupabaseHtml(resp.data, 'GET /supabase/profiles/by-nickname')) {
@@ -1368,7 +1381,7 @@ app.get(['/supabase/profiles/by-device', '/supabase/profiles/by-device/'], async
     const device_id = String(req.query.device_id || '').trim();
     if (!device_id) return res.status(400).json({ error: 'device_id required' });
     const filter = `device_id=eq.${encodeURIComponent(device_id)}`;
-    const select = encodeURIComponent('id,coins,nickname,avatar_url,password_hash,keep_logged_in,device_id');
+    const select = encodeURIComponent('id,tier,generations_left,last_refill_at,nickname,avatar_url,password_hash,keep_logged_in,device_id,device_fingerprint');
     const url = `${SUPABASE_URL}/rest/v1/profiles?${filter}&select=${select}&limit=1`;
     const resp = await axios.get(url, { headers: supabaseHeaders(), timeout: 8000 });
     if (logCriticalIfSupabaseHtml(resp.data, 'GET /supabase/profiles/by-device')) {
@@ -1392,17 +1405,19 @@ app.get('/supabase/profiles', async (req, res) => {
   return res.status(400).json({ error: 'Provide nickname or device_id' });
 });
 
-app.patch('/supabase/profiles/coins', async (req, res) => {
+app.patch('/supabase/profiles/generations-left', async (req, res) => {
   try {
-    const { nickname, coins } = req.body || {};
-    if (!nickname || typeof coins !== 'number') return res.status(400).json({ error: 'nickname and coins required' });
+    const { nickname, generations_left, last_refill_at } = req.body || {};
+    if (!nickname || typeof generations_left !== 'number') return res.status(400).json({ error: 'nickname and generations_left required' });
     const url = `${SUPABASE_URL}/rest/v1/profiles?nickname=eq.${encodeURIComponent(nickname)}`;
-    const resp = await axios.patch(url, { coins }, { headers: supabaseHeaders(), timeout: 8000 });
+    const payload = { generations_left };
+    if (typeof last_refill_at === 'string' || last_refill_at === null) payload.last_refill_at = last_refill_at;
+    const resp = await axios.patch(url, payload, { headers: supabaseHeaders(), timeout: 8000 });
     return res.status(resp.status).json(resp.data);
   } catch (e) {
     const status = e?.response?.status || 500;
-    const data = e?.response?.data || { error: 'Supabase update coins error' };
-    console.error('[Server] Supabase coins error', { status, data });
+    const data = e?.response?.data || { error: 'Supabase update generations_left error' };
+    console.error('[Server] Supabase generations_left error', { status, data });
     return res.status(status).json(data);
   }
 });
@@ -1449,18 +1464,26 @@ app.post('/supabase/tracks/bulk-insert', async (req, res) => {
     };
 
     const normalized = rows
-      .map((row) => ({
-        profile_id: stripEqPrefix(row.profile_id),
-        task_id: row.task_id ?? null,
-        audio_url: row.audio_url,
-        title: row.title ?? null,
-        mood: row.mood ?? null,
-        genres: Array.isArray(row.genres) ? row.genres.filter(Boolean).join(',') : (row.genres || null),
-        liked: typeof row.liked === 'boolean' ? row.liked : false,
-        stream_url: row.stream_url ?? null,
-        mp3_url: row.mp3_url ?? null,
-        image_url: row.image_url ?? null,
-      }))
+      .map((row) => {
+        const tid = typeof row?.task_id === 'string' && row.task_id.trim().length ? row.task_id.trim() : (row?.task_id != null ? String(row.task_id).trim() : '');
+        const meta = tid && taskMetaById.has(tid) ? taskMetaById.get(tid) : null;
+        const metaType = typeof meta?.track_type === 'string' && meta.track_type.trim().length ? meta.track_type.trim() : null;
+        const metaDesc = typeof meta?.description === 'string' && meta.description.trim().length ? meta.description.trim() : null;
+        return {
+          profile_id: stripEqPrefix(row.profile_id),
+          task_id: row.task_id ?? null,
+          audio_url: row.audio_url,
+          title: row.title ?? null,
+          mood: row.mood ?? (typeof meta?.mood === 'string' ? meta.mood : null),
+          genres: Array.isArray(row.genres) ? row.genres.filter(Boolean).join(',') : (row.genres || (typeof meta?.genres === 'string' ? meta.genres : null)),
+          liked: typeof row.liked === 'boolean' ? row.liked : false,
+          stream_url: row.stream_url ?? null,
+          mp3_url: row.mp3_url ?? null,
+          image_url: row.image_url ?? null,
+          track_type: row.track_type ?? metaType ?? null,
+          description: row.description ?? metaDesc ?? null,
+        };
+      })
       .filter((r) => isValidPid(r.profile_id) && r.audio_url && r.audio_url.startsWith('http'));
 
     const seen = new Set();
@@ -1478,7 +1501,7 @@ app.post('/supabase/tracks/bulk-insert', async (req, res) => {
 
     const fetchExisting = async (profile_id, audio_url, task_id, stream_url) => {
       if (task_id && stream_url) {
-        const sel = encodeURIComponent('id,profile_id,task_id,audio_url,stream_url,mp3_url,liked,mood,genres,title,image_url,created_at');
+        const sel = encodeURIComponent('id,profile_id,task_id,audio_url,stream_url,mp3_url,liked,mood,genres,title,image_url,created_at,track_type,description');
         const url =
           `${SUPABASE_URL}/rest/v1/tracks?profile_id=eq.${encodeURIComponent(profile_id)}` +
           `&task_id=eq.${encodeURIComponent(task_id)}` +
@@ -1487,7 +1510,7 @@ app.post('/supabase/tracks/bulk-insert', async (req, res) => {
         const resp = await axios.get(url, { headers: supabaseHeaders(), timeout: 8000 });
         return Array.isArray(resp.data) && resp.data.length ? resp.data[0] : null;
       }
-      const sel = encodeURIComponent('id,profile_id,task_id,audio_url,stream_url,mp3_url,liked,mood,genres,title,image_url,created_at');
+      const sel = encodeURIComponent('id,profile_id,task_id,audio_url,stream_url,mp3_url,liked,mood,genres,title,image_url,created_at,track_type,description');
       const url = `${SUPABASE_URL}/rest/v1/tracks?profile_id=eq.${encodeURIComponent(profile_id)}&audio_url=eq.${encodeURIComponent(audio_url)}&select=${sel}&limit=1`;
       const resp = await axios.get(url, { headers: supabaseHeaders(), timeout: 8000 });
       return Array.isArray(resp.data) && resp.data.length ? resp.data[0] : null;
@@ -1514,6 +1537,17 @@ app.post('/supabase/tracks/bulk-insert', async (req, res) => {
             if (incomingTask && !(typeof existing?.task_id === 'string' && existing.task_id.trim().length)) patch.task_id = incomingTask;
             if (typeof r?.title === 'string' && r.title.trim().length && !(typeof existing?.title === 'string' && existing.title.trim().length)) patch.title = r.title.trim();
             if (typeof r?.image_url === 'string' && r.image_url.trim().length && !(typeof existing?.image_url === 'string' && existing.image_url.trim().length)) patch.image_url = r.image_url.trim();
+            if (typeof r?.track_type === 'string' && r.track_type.trim().length) {
+              const incomingType = r.track_type.trim();
+              const existingType = typeof existing?.track_type === 'string' ? existing.track_type.trim() : '';
+              if (!existingType) patch.track_type = incomingType;
+              else if (existingType === 'instrumental' && incomingType === 'lyrics') patch.track_type = incomingType;
+            }
+            if (typeof r?.description === 'string' && r.description.trim().length) {
+              const incomingDesc = r.description.trim();
+              const existingDesc = typeof existing?.description === 'string' ? existing.description.trim() : '';
+              if (!existingDesc || existingDesc !== incomingDesc) patch.description = incomingDesc;
+            }
             if (Object.keys(patch).length) {
               const patchUrl = `${SUPABASE_URL}/rest/v1/tracks?id=eq.${encodeURIComponent(String(existing.id))}`;
               await axios.patch(patchUrl, patch, { headers: supabaseHeaders(), timeout: 8000 });
@@ -1531,7 +1565,6 @@ app.post('/supabase/tracks/bulk-insert', async (req, res) => {
     }
 
     if (!payload.length) {
-      console.warn('[Server] bulk-insert: no valid rows after dedupe', { original_count: rows.length, normalized_count: normalized.length });
       return res.status(200).json(existingRows);
     }
     console.log('[Server] bulk-insert: inserting rows', { count: payload.length, audio_urls: payload.map((r) => r.audio_url).slice(0, 3) });
@@ -1575,7 +1608,7 @@ app.get('/supabase/tracks/by-profile', async (req, res) => {
     const profile_id = stripEqPrefix(req.query.profile_id);
     if (!profile_id) return res.status(400).json({ error: 'Missing profile_id' });
     
-    const select = encodeURIComponent('id,task_id,audio_url,title,mood,genres,liked,created_at,image_url,stream_url,mp3_url,duration');
+    const select = encodeURIComponent('id,task_id,audio_url,title,mood,genres,liked,created_at,image_url,stream_url,mp3_url,duration,track_type,description');
     const url = `${SUPABASE_URL}/rest/v1/tracks?profile_id=eq.${encodeURIComponent(profile_id)}&select=${select}&order=created_at.desc`;
     const resp = await axios.get(url, { headers: supabaseHeaders(), timeout: 12000 });
 
@@ -1586,11 +1619,10 @@ app.get('/supabase/tracks/by-profile', async (req, res) => {
     const seen = new Set();
     const unique = [];
     for (const r of rows) {
-      const tid = typeof r?.task_id === 'string' && r.task_id.trim().length ? r.task_id.trim() : '';
-      const title = typeof r?.title === 'string' && r.title.trim().length ? r.title.trim() : '';
+      const id = r?.id != null ? String(r.id) : '';
       const au = typeof r?.audio_url === 'string' ? r.audio_url.trim() : '';
       const su = typeof r?.stream_url === 'string' ? r.stream_url.trim() : '';
-      const key = tid && title ? `${tid}::${title}` : (au || su);
+      const key = id || au || su;
       if (!key) continue;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -1682,6 +1714,107 @@ app.post('/supabase/tracks/backfill-mp3', async (req, res) => {
   }
 });
 
+app.all('/supabase/tracks/backfill-from-memories', async (req, res) => {
+  try {
+    const method = String(req.method || 'GET').toUpperCase();
+    if (method === 'OPTIONS') return res.sendStatus(204);
+    if (method !== 'POST') {
+      return res.status(405).json({
+        error: 'method_not_allowed',
+        allowed: ['POST'],
+        hint: 'Use POST with JSON body: { "profile_id": "<id>" }',
+      });
+    }
+
+    const profile_id = stripEqPrefix(req.body?.profile_id);
+    if (!profile_id) return res.status(400).json({ error: 'profile_id required' });
+
+    const fetchMemories = async () => {
+      const base = supabaseAdmin
+        .from('vibe_memories')
+        .select('id,track_id,description,memory_date,created_at')
+        .eq('user_id', profile_id)
+        .not('track_id', 'is', null);
+
+      const withDates = await base.order('memory_date', { ascending: false }).order('created_at', { ascending: false });
+      if (!withDates?.error) return withDates;
+
+      const fallback = await supabaseAdmin
+        .from('vibe_memories')
+        .select('id,track_id,description,created_at')
+        .eq('user_id', profile_id)
+        .not('track_id', 'is', null)
+        .order('created_at', { ascending: false });
+      return fallback;
+    };
+
+    const { data: memoriesRaw, error: memoriesErr } = await fetchMemories();
+    if (memoriesErr) return res.status(500).json({ error: memoriesErr.message || 'vibe_memories_fetch_failed' });
+
+    const memories = Array.isArray(memoriesRaw) ? memoriesRaw : [];
+    const byTrackId = new Map();
+    let skippedEmptyDescription = 0;
+
+    for (const m of memories) {
+      const trackId = m?.track_id != null ? String(m.track_id).trim() : '';
+      const desc = typeof m?.description === 'string' ? m.description.trim() : '';
+      if (!trackId) continue;
+      if (!desc) {
+        skippedEmptyDescription += 1;
+        continue;
+      }
+      if (!byTrackId.has(trackId)) byTrackId.set(trackId, desc);
+    }
+
+    const entries = [...byTrackId.entries()];
+    let updated = 0;
+    let skippedNoTrackMatch = 0;
+    let updateErrors = 0;
+
+    const chunkSize = 10;
+    for (let i = 0; i < entries.length; i += chunkSize) {
+      const chunk = entries.slice(i, i + chunkSize);
+      const results = await Promise.all(
+        chunk.map(async ([trackId, desc]) => {
+          try {
+            const { data, error } = await supabaseAdmin
+              .from('tracks')
+              .update({ track_type: 'lyrics', description: desc })
+              .eq('id', trackId)
+              .eq('profile_id', profile_id)
+              .select('id');
+            if (error) return { ok: false, reason: 'error' };
+            const rows = Array.isArray(data) ? data : [];
+            if (!rows.length) return { ok: false, reason: 'no_match' };
+            return { ok: true };
+          } catch {
+            return { ok: false, reason: 'error' };
+          }
+        })
+      );
+
+      for (const r of results) {
+        if (r.ok) updated += 1;
+        else if (r.reason === 'no_match') skippedNoTrackMatch += 1;
+        else updateErrors += 1;
+      }
+    }
+
+    return res.status(200).json({
+      ok: true,
+      profile_id,
+      memories: memories.length,
+      unique_tracks_with_descriptions: entries.length,
+      updated,
+      skipped_no_track_match: skippedNoTrackMatch,
+      skipped_empty_description: skippedEmptyDescription,
+      update_errors: updateErrors,
+    });
+  } catch (e) {
+    return res.status(500).json({ error: e?.message || 'backfill_from_memories_failed' });
+  }
+});
+
 app.post('/supabase/tracks/update-liked', async (req, res) => {
   try {
     const track_id = String(req.body?.track_id || '').trim();
@@ -1730,18 +1863,17 @@ app.get('/supabase/tracks/favorites/by-profile', async (req, res) => {
     const profile_id = stripEqPrefix(req.query.profile_id);
     if (!profile_id) return res.status(400).json({ error: 'Missing profile_id' });
     
-    const select = encodeURIComponent('id,task_id,audio_url,title,mood,genres,liked,created_at,image_url,stream_url,mp3_url,duration');
+    const select = encodeURIComponent('id,task_id,audio_url,title,mood,genres,liked,created_at,image_url,stream_url,mp3_url,duration,track_type,description');
     const url = `${SUPABASE_URL}/rest/v1/tracks?profile_id=eq.${encodeURIComponent(profile_id)}&select=${select}&liked=eq.true&order=created_at.desc`;
     const resp = await axios.get(url, { headers: supabaseHeaders(), timeout: 12000 });
     const rows = Array.isArray(resp.data) ? resp.data : [];
     const seen = new Set();
     const unique = [];
     for (const r of rows) {
-      const tid = typeof r?.task_id === 'string' && r.task_id.trim().length ? r.task_id.trim() : '';
-      const title = typeof r?.title === 'string' && r.title.trim().length ? r.title.trim() : '';
+      const id = r?.id != null ? String(r.id) : '';
       const au = typeof r?.audio_url === 'string' ? r.audio_url.trim() : '';
       const su = typeof r?.stream_url === 'string' ? r.stream_url.trim() : '';
-      const key = tid && title ? `${tid}::${title}` : (au || su);
+      const key = id || au || su;
       if (!key) continue;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -2071,12 +2203,47 @@ app.post('/proxy/suno/generate', async (req, res) => {
       } catch {}
     }
 
-    const prompt = String(req.body?.prompt || '').trim();
+    const promptRaw = String(req.body?.prompt || '').trim();
+    const prompt = promptRaw.replace(/model\s*v5[.,]?\s*/ig, '').replace(/\s{2,}/g, ' ').trim();
     if (prompt.length > 500) {
       return res.status(400).json({ error: 'Prompt too long (max 500 characters).' });
     }
     const tags = Array.isArray(req.body?.tags) ? req.body.tags : [];
     const derivedFromTags = parseMoodGenresFromTags(tags);
+    const extractMomentFromPrompt = (p) => {
+      try {
+        const s = String(p || '');
+        const m =
+          s.match(/moment described as\s*:\s*'([^']+)'/i) ||
+          s.match(/moment described as\s*:\s*“([^”]+)”/i) ||
+          s.match(/moment described as\s*:\s*"([^"]+)"/i);
+        const raw = m && m[1] ? String(m[1]).trim() : '';
+        return raw.length ? raw : null;
+      } catch {
+        return null;
+      }
+    };
+    const descriptionForCallback = (() => {
+      const direct = req.body?.momentDescription ?? req.body?.description ?? null;
+      if (typeof direct === 'string') {
+        const s = direct.trim();
+        if (s.length) return s;
+      }
+      return extractMomentFromPrompt(prompt);
+    })();
+    const trackTypeForCallback = (() => {
+      const mode = String(req.body?.trackType || req.body?.track_type || req.body?.vocalMode || req.body?.mode || '').trim().toLowerCase();
+      if (mode === 'lyrics') return 'lyrics';
+      if (mode === 'instrumental') return 'instrumental';
+      try {
+        const rawTags = Array.isArray(tags) ? tags : [];
+        const hasLyricsTag = rawTags.some((t) => typeof t === 'string' && t.trim().toLowerCase() === 'lyrics');
+        if (hasLyricsTag) return 'lyrics';
+      } catch {}
+      const v = req.body?.instrumental ?? req.body?.isInstrumental;
+      if (typeof v === 'boolean') return v ? 'instrumental' : 'lyrics';
+      return null;
+    })();
     const requestedMood = (() => {
       const m = req.body?.mood ?? req.body?.userMood ?? req.body?.moodLabel ?? null;
       if (typeof m !== 'string') return null;
@@ -2108,6 +2275,11 @@ app.post('/proxy/suno/generate', async (req, res) => {
           null;
         if (moodToStore) u.searchParams.set('mood', moodToStore);
         if (genresToStore) u.searchParams.set('genres', genresToStore);
+        if (trackTypeForCallback) u.searchParams.set('track_type', trackTypeForCallback);
+        if (descriptionForCallback) {
+          const clipped = String(descriptionForCallback).slice(0, 220);
+          u.searchParams.set('desc', clipped);
+        }
         CALLBACK_URL = u.toString().replace(/\/+$/, '');
       } catch {}
     }
@@ -2119,7 +2291,7 @@ app.post('/proxy/suno/generate', async (req, res) => {
         if (s === 'true' || s === '1' || s === 'yes') return true;
         if (s === 'false' || s === '0' || s === 'no') return false;
       }
-      const mode = String(req.body?.vocalMode || req.body?.mode || '').trim().toLowerCase();
+      const mode = String(req.body?.trackType || req.body?.track_type || req.body?.vocalMode || req.body?.mode || '').trim().toLowerCase();
       if (mode === 'instrumental') return true;
       if (mode === 'lyrics') return false;
       const p = prompt.toLowerCase();
@@ -2127,17 +2299,30 @@ app.post('/proxy/suno/generate', async (req, res) => {
       if (p.includes('lyrics') || p.includes('with vocals')) return false;
       return false;
     })();
-    // Send JSON payload — some providers strictly require JSON body
-    const payloadBase = {
-      prompt,
-      tags,
+    let resolvedTier = 'free';
+    if (requestedProfileId) {
+      try {
+        const url = `${SUPABASE_URL}/rest/v1/profiles?id=eq.${encodeURIComponent(requestedProfileId)}&select=tier&limit=1`;
+        const resp = await axios.get(url, { headers: supabaseHeaders(), timeout: 8000 });
+        if (!logCriticalIfSupabaseHtml(resp.data, 'GET /rest/v1/profiles (tier for suno)')) {
+          const row = Array.isArray(resp.data) ? resp.data[0] : null;
+          const t = typeof row?.tier === 'string' ? String(row.tier).trim().toLowerCase() : '';
+          if (t === 'pro' || t === 'vip') resolvedTier = t;
+        }
+      } catch {}
+    }
+    const effectiveModel = resolvedTier === 'pro' || resolvedTier === 'vip' ? 'V5_5' : 'V3_5';
+    console.log(`[Suno Request] Tier: ${resolvedTier || 'free'}, Model: ${effectiveModel}`);
+    const payload = {
       customMode: false,
       instrumental,
-      image_style: 'minimal',
-      callback_url: CALLBACK_URL,
-      callbackUrl: CALLBACK_URL,
+      prompt,
+      model: effectiveModel,
       callBackUrl: CALLBACK_URL,
-      envCallback: CALLBACK_URL,
+      vocalGender: 'm',
+      styleWeight: 0.61,
+      weirdnessConstraint: 0.72,
+      audioWeight: 0.65,
     };
 
     if (DRY_RUN) {
@@ -2145,7 +2330,7 @@ app.post('/proxy/suno/generate', async (req, res) => {
     }
 
     const url = `${API_BASE}/generate`;
-    console.log('[Server] Forwarding Suno generate', { url, prompt, tags, customMode: payloadBase.customMode, instrumental: payloadBase.instrumental, callback: CALLBACK_URL, callbackSource });
+    console.log('[Server] Forwarding Suno generate', { url, prompt, customMode: payload.customMode, instrumental: payload.instrumental, callBackUrl: CALLBACK_URL, callbackSource, tier: resolvedTier, model: effectiveModel });
     console.log('[Server] Callback URL compare', {
       isRailway: !!process.env.RAILWAY_STATIC_URL,
       railwayStaticRaw: String(process.env.RAILWAY_STATIC_URL || ''),
@@ -2161,16 +2346,6 @@ app.post('/proxy/suno/generate', async (req, res) => {
       apiBaseFinal: API_BASE,
       apiBaseHadTrailingSlash: /\/\s*$/.test(String(process.env.SUNO_API_URL || process.env.EXPO_PUBLIC_SUNO_BASE || '')),
     });
-    const modelCandidates = ['V3_5', 'v3.5', 'V3_0'];
-    const isModelError = (data) => {
-      try {
-        const d = JSON.stringify(data || {}).toLowerCase();
-        return d.includes('model') && (d.includes('error') || d.includes('invalid') || d.includes('not support'));
-      } catch {
-        return false;
-      }
-    };
-    
     const authCandidates = (() => {
       const k = String(API_KEY || '').trim();
       if (!k) return [];
@@ -2184,37 +2359,17 @@ app.post('/proxy/suno/generate', async (req, res) => {
       try {
         authHeaderUsed = authHeader;
         console.log('[Server] Using Auth mode:', authHeader.toLowerCase().startsWith('bearer ') ? 'bearer' : 'raw');
-        for (const model of modelCandidates) {
-          const payload = { ...payloadBase, model };
-          try { console.log('Sending Payload to Suno:', JSON.stringify(payload)); } catch {}
-          try {
-            resp = await axios.post(url, payload, {
-              headers: {
-                Authorization: authHeader,
-                'Content-Type': 'application/json',
-                Accept: 'application/json, text/plain, */*',
-                'User-Agent': 'Mozilla/5.0',
-              },
-              httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
-              timeout: 60_000,
-            });
-            break;
-          } catch (e) {
-            lastAuthErr = e;
-            const st = e?.response?.status || 0;
-            const dat = e?.response?.data || null;
-            if (st === 400) {
-              try { console.log('[Server] Suno 400 payload dump:', JSON.stringify(payload)); } catch {}
-              try { console.warn('[Server] Suno 400 response:', dat); } catch {}
-              if (isModelError(dat) && model !== 'V3_0') {
-                console.warn('[Server] Model error, retrying with next model', { modelTried: model });
-                continue;
-              }
-            }
-            if (st === 401) break;
-            throw e;
-          }
-        }
+        try { console.log('Sending Payload to Suno:', JSON.stringify(payload)); } catch {}
+        resp = await axios.post(url, payload, {
+          headers: {
+            Authorization: authHeader,
+            'Content-Type': 'application/json',
+            Accept: 'application/json, text/plain, */*',
+            'User-Agent': 'Mozilla/5.0',
+          },
+          httpsAgent: new (require('https').Agent)({ rejectUnauthorized: false }),
+          timeout: 60_000,
+        });
         if (resp) break;
       } catch (e) {
         lastAuthErr = e;
@@ -2259,8 +2414,11 @@ app.post('/proxy/suno/generate', async (req, res) => {
           (Array.isArray(requestedGenres) && requestedGenres.length ? requestedGenres.join(',') : null) ||
           derivedFromTags.genres ||
           null;
-        if (moodToStore || genresToStore) {
-          taskMetaById.set(tid, { mood: moodToStore, genres: genresToStore });
+        const descriptionToStore = descriptionForCallback;
+        const trackTypeToStore = trackTypeForCallback || (instrumental ? 'instrumental' : 'lyrics');
+        if (moodToStore || genresToStore || descriptionToStore || trackTypeToStore) {
+          const prev = taskMetaById.get(tid) || {};
+          taskMetaById.set(tid, { ...prev, mood: moodToStore, genres: genresToStore, description: descriptionToStore, track_type: trackTypeToStore });
         }
         if (!pollingByTaskId.has(tid)) {
           pollingByTaskId.set(tid, { startedAt: Date.now(), attempts: 0, profile_id: requestedProfileId || null, workerStarted: true });
@@ -2373,15 +2531,28 @@ async function handleSunoCallback(req, res) {
       const g1 = typeof req.query?.genre1 === 'string' ? String(req.query.genre1).trim() : '';
       const g2 = typeof req.query?.genre2 === 'string' ? String(req.query.genre2).trim() : '';
       const genres = gRaw || [g1, g2].filter(Boolean).join(',');
+      const ttRaw =
+        typeof req.query?.track_type === 'string'
+          ? String(req.query.track_type).trim()
+          : (typeof req.query?.vocalMode === 'string' ? String(req.query.vocalMode).trim() : '');
+      const track_type = ttRaw.toLowerCase() === 'lyrics' ? 'lyrics' : (ttRaw.toLowerCase() === 'instrumental' ? 'instrumental' : null);
+      const descRaw =
+        typeof req.query?.desc === 'string'
+          ? String(req.query.desc).trim()
+          : (typeof req.query?.description === 'string' ? String(req.query.description).trim() : '');
+      const description = descRaw.length ? descRaw : null;
       return {
         mood: m.length ? m : null,
         genres: genres.length ? genres : null,
+        track_type,
+        description,
       };
     })();
     if (task_id) {
       const tid = String(task_id).trim();
-      if (tid && (incomingMeta.mood || incomingMeta.genres)) {
-        taskMetaById.set(tid, { mood: incomingMeta.mood, genres: incomingMeta.genres });
+      if (tid && (incomingMeta.mood || incomingMeta.genres || incomingMeta.track_type || incomingMeta.description)) {
+        const prev = taskMetaById.get(tid) || {};
+        taskMetaById.set(tid, { ...prev, mood: incomingMeta.mood, genres: incomingMeta.genres, track_type: incomingMeta.track_type, description: incomingMeta.description });
       }
     }
 
@@ -2564,8 +2735,13 @@ async function handleSunoCallback(req, res) {
               const meta = tid ? (taskMetaById.get(tid) || null) : null;
               const mood = incomingMeta?.mood || (typeof meta?.mood === 'string' ? meta.mood : null) || null;
               const genres = incomingMeta?.genres || (typeof meta?.genres === 'string' ? meta.genres : null) || null;
-              if (tid && (mood || genres)) taskMetaById.set(tid, { mood, genres });
-              await upsertTracksForProfile(finalProfileId, found.slice(0, 2), null, baseTitle, cover, tid, 'callback_text', null, null, mood, genres);
+              const track_type = typeof meta?.track_type === 'string' ? meta.track_type : null;
+              const description = typeof meta?.description === 'string' ? meta.description : null;
+              if (tid && (mood || genres || track_type || description)) {
+                const prev = taskMetaById.get(tid) || {};
+                taskMetaById.set(tid, { ...prev, mood, genres, track_type, description });
+              }
+              await upsertTracksForProfile(finalProfileId, found.slice(0, 2), null, baseTitle, cover, tid, 'callback_text', null, null, mood, genres, track_type, description);
             } catch {}
           } else {
             io.emit('suno:track', payload);
@@ -2677,18 +2853,26 @@ async function handleSunoCallback(req, res) {
         (typeof title === 'string' && title.trim().length ? title.trim() : null) ||
         'New Track';
       const taskMeta = (() => {
-        if (incomingMeta.mood || incomingMeta.genres) {
-          return { mood: incomingMeta.mood, genres: incomingMeta.genres };
-        }
         try {
           const tid = task_id ? String(task_id) : null;
-          if (tid && taskMetaById.has(tid)) {
-            const m = taskMetaById.get(tid);
-            return {
-              mood: typeof m?.mood === 'string' && m.mood.trim().length ? m.mood.trim() : null,
-              genres: typeof m?.genres === 'string' && m.genres.trim().length ? m.genres.trim() : null,
-            };
-          }
+          const m = tid && taskMetaById.has(tid) ? taskMetaById.get(tid) : null;
+          const mood =
+            incomingMeta?.mood ||
+            (typeof m?.mood === 'string' && m.mood.trim().length ? m.mood.trim() : null) ||
+            null;
+          const genres =
+            incomingMeta?.genres ||
+            (typeof m?.genres === 'string' && m.genres.trim().length ? m.genres.trim() : null) ||
+            null;
+          const track_type =
+            incomingMeta?.track_type ||
+            (typeof m?.track_type === 'string' && m.track_type.trim().length ? m.track_type.trim() : null) ||
+            (callbackType === 'text' ? 'lyrics' : null);
+          const description =
+            incomingMeta?.description ||
+            (typeof m?.description === 'string' && m.description.trim().length ? m.description.trim() : null) ||
+            null;
+          return { mood, genres, track_type, description };
         } catch {}
         try {
           const tags =
@@ -2697,7 +2881,7 @@ async function handleSunoCallback(req, res) {
             (Array.isArray(items?.[0]?.tags) ? items[0].tags : null) ||
             null;
           const parsed = parseMoodGenresFromTags(tags);
-          if (parsed.mood || parsed.genres) return { mood: parsed.mood, genres: parsed.genres };
+          if (parsed.mood || parsed.genres) return { mood: parsed.mood, genres: parsed.genres, track_type: callbackType === 'text' ? 'lyrics' : null, description: null };
         } catch {}
         try {
           const text =
@@ -2708,10 +2892,10 @@ async function handleSunoCallback(req, res) {
             const genresMatch = text.match(/genres?\s*[:=]\s*([a-z0-9][a-z0-9 ,&/\\-]{2,80})/i);
             const mood = moodMatch?.[1] ? moodMatch[1].trim() : null;
             const genres = genresMatch?.[1] ? genresMatch[1].trim().replace(/\s+/g, ' ') : null;
-            return { mood: mood || null, genres: genres || null };
+            return { mood: mood || null, genres: genres || null, track_type: callbackType === 'text' ? 'lyrics' : null, description: null };
           }
         } catch {}
-        return { mood: null, genres: null };
+        return { mood: null, genres: null, track_type: null, description: null };
       })();
       const streamByIndex = [];
       const audioByIndex = [];
@@ -2764,7 +2948,7 @@ async function handleSunoCallback(req, res) {
           const audios = [audioByIndex[0] || null, audioByIndex[1] || null];
           const mp3s = isCompleteSignal ? [mp3ByIndex[0] || null, mp3ByIndex[1] || null] : null;
           // Metadata Sync: duration sync during complete callback
-          savedIds = await upsertTracksForProfile(finalProfileId, finalStreams, mp3s, onlySecond ? `${baseTitle} 2` : baseTitle, typeof cover === 'string' ? cover : null, task_id ? String(task_id) : null, 'callback', isCompleteSignal ? durations : null, audios, taskMeta.mood, taskMeta.genres);
+          savedIds = await upsertTracksForProfile(finalProfileId, finalStreams, mp3s, onlySecond ? `${baseTitle} 2` : baseTitle, typeof cover === 'string' ? cover : null, task_id ? String(task_id) : null, 'callback', isCompleteSignal ? durations : null, audios, taskMeta.mood, taskMeta.genres, taskMeta.track_type, taskMeta.description);
         } catch (e) {
           console.warn('[Server] tracks upsert from callback failed', e?.message || e);
         }
